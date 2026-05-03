@@ -1,0 +1,9 @@
+.vscode/**
+src/**
+tsconfig.json
+*.vsix
+node_modules/**
+!node_modules/sql.js/dist/sql-wasm.js
+!node_modules/sql.js/dist/sql-wasm.wasm
+!node_modules/sql.js/package.json
+package-lock.json
