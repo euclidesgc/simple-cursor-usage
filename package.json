@@ -1,8 +1,8 @@
 {
-  "name": "cursor-monthly-usage",
-  "displayName": "Cursor Monthly Usage",
-  "description": "Show Cursor monthly usage in the status bar.",
-  "version": "0.1.0",
+  "name": "cursor-usage-for-teams",
+  "displayName": "Cursor Usage for Teams",
+  "description": "Show Cursor monthly usage for teams in the status bar.",
+  "version": "0.1.2",
   "publisher": "local",
   "license": "MIT",
   "engines": {
@@ -13,46 +13,46 @@
   ],
   "activationEvents": [
     "onStartupFinished",
-    "onCommand:cursorMonthlyUsage.refresh",
-    "onCommand:cursorMonthlyUsage.showDetails",
-    "onCommand:cursorMonthlyUsage.setToken",
-    "onCommand:cursorMonthlyUsage.clearToken"
+    "onCommand:cursorUsageForTeams.refresh",
+    "onCommand:cursorUsageForTeams.showDetails",
+    "onCommand:cursorUsageForTeams.setToken",
+    "onCommand:cursorUsageForTeams.clearToken"
   ],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "cursorMonthlyUsage.refresh",
+        "command": "cursorUsageForTeams.refresh",
         "title": "Cursor Monthly Usage: Refresh"
       },
       {
-        "command": "cursorMonthlyUsage.showDetails",
+        "command": "cursorUsageForTeams.showDetails",
         "title": "Cursor Monthly Usage: Show Details"
       },
       {
-        "command": "cursorMonthlyUsage.setToken",
+        "command": "cursorUsageForTeams.setToken",
         "title": "Cursor Monthly Usage: Set Token"
       },
       {
-        "command": "cursorMonthlyUsage.clearToken",
+        "command": "cursorUsageForTeams.clearToken",
         "title": "Cursor Monthly Usage: Clear Stored Token"
       }
     ],
     "configuration": {
       "title": "Cursor Monthly Usage",
       "properties": {
-        "cursorMonthlyUsage.apiBaseUrl": {
+        "cursorUsageForTeams.apiBaseUrl": {
           "type": "string",
-          "default": "https://api2.cursor.sh",
-          "description": "Cursor API origin used for usage requests. Must be HTTPS."
+          "default": "https://cursor.com",
+          "description": "Cursor web API origin for usage-summary requests. Must be HTTPS."
         },
-        "cursorMonthlyUsage.pollIntervalSeconds": {
+        "cursorUsageForTeams.pollIntervalSeconds": {
           "type": "number",
           "default": 300,
           "minimum": 60,
           "description": "How often to refresh usage in the background."
         },
-        "cursorMonthlyUsage.displayFormat": {
+        "cursorUsageForTeams.displayFormat": {
           "type": "string",
           "default": "remaining",
           "enum": [
@@ -62,29 +62,24 @@
           ],
           "description": "Status bar format."
         },
-        "cursorMonthlyUsage.includedModelKey": {
-          "type": "string",
-          "default": "gpt-4",
-          "description": "Preferred model key when the API returns request-bucket usage."
-        },
-        "cursorMonthlyUsage.warningRemainingPercent": {
+        "cursorUsageForTeams.warningRemainingPercent": {
           "type": "number",
           "default": 20,
           "minimum": 0,
           "maximum": 100,
           "description": "Warn when remaining usage is at or below this percent."
         },
-        "cursorMonthlyUsage.criticalRemainingPercent": {
+        "cursorUsageForTeams.criticalRemainingPercent": {
           "type": "number",
           "default": 10,
           "minimum": 0,
           "maximum": 100,
           "description": "Show an error color when remaining usage is at or below this percent."
         },
-        "cursorMonthlyUsage.enableLocalTokenDiscovery": {
+        "cursorUsageForTeams.enableLocalTokenDiscovery": {
           "type": "boolean",
           "default": true,
-          "description": "Read Cursor's local state.vscdb to find the current access token."
+          "description": "Read Cursor local state.vscdb to find the session token and user id."
         }
       }
     }
@@ -96,9 +91,9 @@
   },
   "devDependencies": {
     "@types/node": "^20.11.30",
-    "@types/sql.js": "^1.4.11",
     "@types/vscode": "^1.90.0",
-    "typescript": "^5.4.5"
+    "typescript": "^5.4.5",
+    "@types/sql.js": "^1.4.11"
   },
   "dependencies": {
     "sql.js": "^1.14.1"
