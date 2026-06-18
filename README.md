@@ -2,7 +2,7 @@
 
 A VS Code / Cursor extension that shows your **monthly Cursor usage** in the status bar, formatted in **USD**. Values from the Cursor API are reported in cents and displayed as dollars (cents ÷ 100).
 
-**Package:** `cursor-usage-for-teams` · **Version:** `0.1.2`
+**Package:** `cursor-usage-for-teams` · **Version:** `0.2.0`
 
 ## Features
 
@@ -125,25 +125,47 @@ The response is parsed for plan usage fields (e.g. usedCents, limitCents). Amoun
 
 If no session can be resolved, the status bar shows a warning; use Set Token or sign in to Cursor with discovery enabled.
 
-Development
+## Development
+
+```bash
 npm install
 npm run compile
-Open this folder in VS Code or Cursor, press F5 (or choose Run Extension from the Debug panel). The launch configuration compiles TypeScript before starting an Extension Development Host.
+```
 
-Use npm run watch for continuous compilation while developing.
+Open this folder in VS Code or Cursor, press `F5` (or choose **Run Extension** from the Debug panel). The launch configuration compiles TypeScript before starting an Extension Development Host. Use `npm run watch` for continuous compilation while developing.
 
-Packaging
-Install vsce if needed:
+### Quality
 
+The pure pacing math lives in `src/dailyInsight.ts` (no VS Code dependency) and is unit-tested with [Vitest](https://vitest.dev/).
+
+```bash
+npm test            # run the unit tests
+npm run lint        # ESLint
+npm run format      # Prettier (write); format:check to verify only
+```
+
+## Packaging
+
+Install `vsce` if needed:
+
+```bash
 npm install -g @vscode/vsce
+```
+
 From the project root:
 
+```bash
 npm run compile
 vsce package
-Install the generated VSIX (version 0.1.3):
+```
 
-code --install-extension cursor-usage-for-teams-0.1.3.vsix
-In Cursor, use Extensions: Install from VSIX… from the Command Palette if code is not on your PATH.
+Install the generated VSIX (version 0.2.0):
+
+```bash
+code --install-extension cursor-usage-for-teams-0.2.0.vsix
+```
+
+In Cursor, use **Extensions: Install from VSIX…** from the Command Palette if `code` is not on your PATH.
 
 Security
 Credentials stay local — Session tokens read from state.vscdb are not written to disk by the extension except when you explicitly use Set Token (Secret Storage only).

@@ -78,7 +78,11 @@ export function normalizeUsageDays(value: unknown): Set<number> {
 // Counts calendar days in [from, to) whose weekday is a usage day. Dates are
 // handled in UTC so counts align with the (UTC) billing period boundaries and
 // stay independent of the machine timezone.
-export function countUsageDays(from: Date, to: Date, days: Set<number>): number {
+export function countUsageDays(
+  from: Date,
+  to: Date,
+  days: Set<number>,
+): number {
   if (!(from.getTime() < to.getTime())) {
     return 0;
   }

@@ -371,7 +371,6 @@ function parseDashboardUsage(payload: unknown): UsageSnapshot | undefined {
   });
 }
 
-
 function parseGenericUsage(
   payload: unknown,
   source: string,
@@ -462,7 +461,6 @@ function parseGenericUsage(
   return snapshot;
 }
 
-
 function completeSnapshot(snapshot: UsageSnapshot): UsageSnapshot {
   if (snapshot.limit !== undefined) {
     snapshot.remaining = Math.max(0, snapshot.limit - snapshot.used);
@@ -476,7 +474,9 @@ function completeSnapshot(snapshot: UsageSnapshot): UsageSnapshot {
 }
 
 function parseUsageDays(): Set<number> {
-  return normalizeUsageDays(getConfig<unknown>("usageDays", DEFAULT_USAGE_DAYS));
+  return normalizeUsageDays(
+    getConfig<unknown>("usageDays", DEFAULT_USAGE_DAYS),
+  );
 }
 
 function resolveDailyBudgetStrategy(): DailyBudgetStrategy {
@@ -495,7 +495,6 @@ function buildInsight(snapshot: UsageSnapshot): DailyInsight {
     now: new Date(),
   });
 }
-
 
 function renderSnapshot(snapshot: UsageSnapshot) {
   const displayFormat = getConfig<DisplayFormat>("displayFormat", "remaining");
@@ -627,13 +626,9 @@ function buildTooltip(
   if (snapshot.label) {
     tooltip.appendMarkdown(`Bucket: ${snapshot.label}\n\n`);
   }
-  tooltip.appendMarkdown(
-    `Used: ${formatUsageValue(snapshot.used)}\n\n`,
-  );
+  tooltip.appendMarkdown(`Used: ${formatUsageValue(snapshot.used)}\n\n`);
   if (snapshot.limit !== undefined) {
-    tooltip.appendMarkdown(
-      `Limit: ${formatUsageValue(snapshot.limit)}\n\n`,
-    );
+    tooltip.appendMarkdown(`Limit: ${formatUsageValue(snapshot.limit)}\n\n`);
   }
   if (snapshot.remaining !== undefined) {
     tooltip.appendMarkdown(
@@ -767,7 +762,9 @@ function dailyDetailLines(insight: DailyInsight | undefined): string[] {
   ];
 
   if (insight.headroomPerDay !== undefined) {
-    lines.push(`Headroom per usage day: ${formatHeadroom(insight.headroomPerDay)}`);
+    lines.push(
+      `Headroom per usage day: ${formatHeadroom(insight.headroomPerDay)}`,
+    );
   }
 
   lines.push(
@@ -936,9 +933,6 @@ function mergeCursorAuthValues(
   return merged;
 }
 
-
-
-
 function buildSessionCookieHeader(auth: CursorSessionAuth): string {
   const raw = auth.rawAccessToken?.trim();
   if (raw) {
@@ -1039,7 +1033,6 @@ function extractWorkosId(
 
   return undefined;
 }
-
 
 function workosIdFromSessionToken(sessionToken: string): string | undefined {
   const payload = decodeJwtPayload(sessionToken);
@@ -1295,7 +1288,6 @@ function previewText(text: string): string {
 
   return preview;
 }
-
 
 function findObjectByKey(
   value: unknown,

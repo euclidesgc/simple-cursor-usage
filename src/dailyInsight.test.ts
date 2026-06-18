@@ -45,7 +45,9 @@ describe("countUsageDays", () => {
 
 describe("normalizeUsageDays", () => {
   it("maps weekday names to indices", () => {
-    expect([...normalizeUsageDays(["monday", "friday"])].sort()).toEqual([1, 5]);
+    expect([...normalizeUsageDays(["monday", "friday"])].sort()).toEqual([
+      1, 5,
+    ]);
   });
 
   it("is case- and whitespace-insensitive", () => {
@@ -114,7 +116,11 @@ describe("computeDailyInsight", () => {
 
   it("leaves the budget undefined when there is no limit/remaining", () => {
     const insight = computeDailyInsight(
-      { used: 7307, periodStart: totals.periodStart, periodEnd: totals.periodEnd },
+      {
+        used: 7307,
+        periodStart: totals.periodStart,
+        periodEnd: totals.periodEnd,
+      },
       { usageDays: MON_TO_FRI, strategy: "dynamic", now },
     );
 

@@ -1,6 +1,10 @@
 .vscode/**
 src/**
+dist/**/*.map
 tsconfig.json
+eslint.config.js
+.prettierrc.json
+.prettierignore
 *.vsix
 node_modules/**
 !node_modules/sql.js/dist/sql-wasm.js
