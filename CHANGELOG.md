@@ -12,18 +12,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and a per-usage-day insight: recommended spend per usage day (dynamic or
   static), your average pace so far, and the daily headroom. Includes the
   command **Cursor Monthly Usage: Toggle Daily / Total View** and the settings
-  `usageDays`, `dailyBudgetStrategy`, `defaultView`, and `dailyDisplayFormat`.
+  `usageDays`, `dailyBudgetStrategy`, and `statusBarDisplay`.
 - Request timeout (15s) so a hung usage request no longer leaves the status bar
   spinning until the next poll.
 - Vitest unit tests for the pacing math (`src/dailyInsight.ts`).
 
 ### Changed
 
+- Unified `statusBarDisplay` replaces `defaultView`, `displayFormat`, and `dailyDisplayFormat` (legacy keys still read as fallback).
+- Settings UI is grouped into four categories in VS Code/Cursor (**Status Bar**, **Daily Pacing**, **Low-Budget Alerts**, **Data & Authentication**) with clearer descriptions and enum hints.
 - `apiBaseUrl` and `enableLocalTokenDiscovery` are now `machine`-scoped so a
   workspace cannot override them (the session cookie is only ever sent to
   `apiBaseUrl`).
-- The total-view status bar format setting is `displayFormat`; the daily view
-  has its own `dailyDisplayFormat` (defaults to `inherit`).
 - Internal: extracted the pure pacing math into `src/dailyInsight.ts`,
   simplified the usage request, and tightened the TypeScript compiler options.
 

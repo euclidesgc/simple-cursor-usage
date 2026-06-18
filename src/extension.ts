@@ -17,8 +17,23 @@ let sqlJs: Promise<SqlJsStatic> | undefined;
 let extensionPath: string | undefined;
 
 type DisplayFormat = "remaining" | "fraction" | "percent";
-type DailyDisplayFormat = DisplayFormat | "inherit";
 type ViewMode = "total" | "daily";
+type StatusBarDisplay =
+  | "totalRemaining"
+  | "totalFraction"
+  | "totalPercent"
+  | "dailyRemaining"
+  | "dailyFraction"
+  | "dailyPercent";
+
+const STATUS_BAR_DISPLAYS: readonly StatusBarDisplay[] = [
+  "totalRemaining",
+  "totalFraction",
+  "totalPercent",
+  "dailyRemaining",
+  "dailyFraction",
+  "dailyPercent",
+];
 
 type StatusBarModel = {
   icon: string;
@@ -54,19 +69,20 @@ type CursorSessionAuth = {
   rawAccessToken?: string;
 };
 
-const viewStateKey = "cursorUsageForTeams.activeView";
+const displayStateKey = "cursorUsageForTeams.statusBarDisplay";
+const legacyViewStateKey = "cursorUsageForTeams.activeView";
 
 let statusBar: vscode.StatusBarItem;
 let refreshTimer: NodeJS.Timeout | undefined;
 let lastSnapshot: UsageSnapshot | undefined;
 let lastError: string | undefined;
-let activeView: ViewMode = "total";
+let activeDisplay: StatusBarDisplay = "totalRemaining";
 let viewMemento: vscode.Memento | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
   extensionPath = context.extensionPath;
   viewMemento = context.globalState;
-  activeView = resolveInitialView();
+  activeDisplay = resolveInitialDisplay();
   statusBar = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Right,
     98,
@@ -94,6 +110,17 @@ export function activate(context: vscode.ExtensionContext) {
       toggleView(),
     ),
     vscode.workspace.onDidChangeConfiguration((event) => {
+      if (
+        event.affectsConfiguration("cursorUsageForTeams.statusBarDisplay")
+      ) {
+        activeDisplay = readConfiguredDisplay();
+        void viewMemento?.update(displayStateKey, activeDisplay);
+        if (lastSnapshot) {
+          renderSnapshot(lastSnapshot);
+        } else if (lastError) {
+          renderError();
+        }
+      }
       if (event.affectsConfiguration("cursorUsageForTeams")) {
         scheduleRefresh(context);
         void refreshUsage(context, false);
@@ -111,22 +138,114 @@ export function deactivate() {
   }
 }
 
-function resolveInitialView(): ViewMode {
-  const stored = viewMemento?.get<ViewMode>(viewStateKey);
-  if (stored === "total" || stored === "daily") {
+function isStatusBarDisplay(value: unknown): value is StatusBarDisplay {
+  return (
+    typeof value === "string" &&
+    (STATUS_BAR_DISPLAYS as readonly string[]).includes(value)
+  );
+}
+
+function parseDisplay(display: StatusBarDisplay): {
+  view: ViewMode;
+  format: DisplayFormat;
+} {
+  switch (display) {
+    case "totalRemaining":
+      return { view: "total", format: "remaining" };
+    case "totalFraction":
+      return { view: "total", format: "fraction" };
+    case "totalPercent":
+      return { view: "total", format: "percent" };
+    case "dailyRemaining":
+      return { view: "daily", format: "remaining" };
+    case "dailyFraction":
+      return { view: "daily", format: "fraction" };
+    case "dailyPercent":
+      return { view: "daily", format: "percent" };
+  }
+}
+
+function composeDisplay(
+  view: ViewMode,
+  format: DisplayFormat,
+): StatusBarDisplay {
+  if (view === "total") {
+    if (format === "remaining") {
+      return "totalRemaining";
+    }
+    if (format === "fraction") {
+      return "totalFraction";
+    }
+    return "totalPercent";
+  }
+  if (format === "remaining") {
+    return "dailyRemaining";
+  }
+  if (format === "fraction") {
+    return "dailyFraction";
+  }
+  return "dailyPercent";
+}
+
+function flipView(display: StatusBarDisplay): StatusBarDisplay {
+  const { view, format } = parseDisplay(display);
+  return composeDisplay(view === "daily" ? "total" : "daily", format);
+}
+
+function readConfiguredDisplay(): StatusBarDisplay {
+  const configured = getConfig<string>("statusBarDisplay", "totalRemaining");
+  if (isStatusBarDisplay(configured)) {
+    return configured;
+  }
+
+  const defaultView = getConfig<ViewMode>("defaultView", "total");
+  const displayFormat = getConfig<DisplayFormat>("displayFormat", "remaining");
+  const dailyRaw = getConfig<string>("dailyDisplayFormat", "inherit");
+  const view: ViewMode = defaultView === "daily" ? "daily" : "total";
+  let format: DisplayFormat = displayFormat;
+  if (view === "daily") {
+    if (
+      dailyRaw === "remaining" ||
+      dailyRaw === "fraction" ||
+      dailyRaw === "percent"
+    ) {
+      format = dailyRaw;
+    }
+  }
+  return composeDisplay(view, format);
+}
+
+function resolveInitialDisplay(): StatusBarDisplay {
+  const stored = viewMemento?.get<unknown>(displayStateKey);
+  if (isStatusBarDisplay(stored)) {
     return stored;
   }
 
-  return getConfig<ViewMode>("defaultView", "total") === "daily"
-    ? "daily"
-    : "total";
+  const legacyView = viewMemento?.get<ViewMode>(legacyViewStateKey);
+  if (legacyView === "total" || legacyView === "daily") {
+    const { format } = parseDisplay(readConfiguredDisplay());
+    return composeDisplay(legacyView, format);
+  }
+
+  return readConfiguredDisplay();
+}
+
+function displayModeLabel(display: StatusBarDisplay): string {
+  const { view, format } = parseDisplay(display);
+  const viewLabel = view === "total" ? "monthly" : "daily";
+  const formatLabel =
+    format === "remaining"
+      ? "remaining"
+      : format === "fraction"
+        ? "fraction"
+        : "percent";
+  return `${viewLabel} · ${formatLabel}`;
 }
 
 async function toggleView() {
-  activeView = activeView === "daily" ? "total" : "daily";
-  await viewMemento?.update(viewStateKey, activeView);
+  activeDisplay = flipView(activeDisplay);
+  await viewMemento?.update(displayStateKey, activeDisplay);
 
-  // Toggling is presentation-only — re-render the data we already have.
   if (lastSnapshot) {
     renderSnapshot(lastSnapshot);
   } else if (lastError) {
@@ -135,7 +254,6 @@ async function toggleView() {
     setLoading();
   }
 }
-
 function scheduleRefresh(context: vscode.ExtensionContext) {
   if (refreshTimer) {
     clearInterval(refreshTimer);
@@ -497,14 +615,14 @@ function buildInsight(snapshot: UsageSnapshot): DailyInsight {
 }
 
 function renderSnapshot(snapshot: UsageSnapshot) {
-  const displayFormat = getConfig<DisplayFormat>("displayFormat", "remaining");
+  const { view, format } = parseDisplay(activeDisplay);
   const insight = buildInsight(snapshot);
 
   // Daily view needs a computable budget; otherwise fall back to the total view.
   const model =
-    activeView === "daily" && insight && insight.recommendedPerDay !== undefined
-      ? buildDailyModel(insight, resolveDailyDisplayFormat(displayFormat))
-      : buildTotalModel(snapshot, displayFormat);
+    view === "daily" && insight && insight.recommendedPerDay !== undefined
+      ? buildDailyModel(insight, format)
+      : buildTotalModel(snapshot, format);
 
   statusBar.text = `$(${model.icon}) ${model.value}`;
   statusBar.tooltip = buildTooltip(snapshot, insight);
@@ -531,21 +649,6 @@ function buildDailyModel(
     value: formatDailyValue(insight, displayFormat),
     percentForColor: insight.percentRemainingOfBudget,
   };
-}
-
-function resolveDailyDisplayFormat(totalFormat: DisplayFormat): DisplayFormat {
-  const configured = getConfig<DailyDisplayFormat>(
-    "dailyDisplayFormat",
-    "inherit",
-  );
-  if (
-    configured === "remaining" ||
-    configured === "fraction" ||
-    configured === "percent"
-  ) {
-    return configured;
-  }
-  return totalFormat;
 }
 
 function colorForPercent(
@@ -712,7 +815,7 @@ async function showDetails() {
   }
 
   const insight = buildInsight(lastSnapshot);
-  const toggleLabel = `$(arrow-swap) Toggle daily / total view (now: ${activeView})`;
+  const toggleLabel = `$(arrow-swap) Toggle daily / total view (now: ${displayModeLabel(activeDisplay)})`;
 
   const lines = [
     toggleLabel,

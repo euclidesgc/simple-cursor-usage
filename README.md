@@ -4,6 +4,8 @@ A VS Code / Cursor extension that shows your **monthly Cursor usage** in the sta
 
 **Package:** `cursor-usage-for-teams` · **Version:** `0.2.0`
 
+Track your plan budget at a glance, drill into period and daily pacing details, and switch views without leaving the editor. Sign in to Cursor locally — no manual setup required.
+
 ## Features
 
 - **Status bar** — Shows remaining usage, used/limit fraction, or percent remaining (configurable).
@@ -36,34 +38,49 @@ A VS Code / Cursor extension that shows your **monthly Cursor usage** in the sta
 
 All settings use the prefix `cursorUsageForTeams.`.
 
-| Setting                     | Type      | Default              | Description                                                                      |
-| --------------------------- | --------- | -------------------- | -------------------------------------------------------------------------------- |
-| `apiBaseUrl`                | `string`  | `https://cursor.com` | Cursor web API origin for usage requests. Must be HTTPS.                         |
-| `pollIntervalSeconds`       | `number`  | `300`                | Background refresh interval in seconds (minimum `60`).                           |
-| `displayFormat`             | `string`  | `remaining`          | Status bar format for the total view: `remaining`, `fraction`, or `percent`.     |
-| `dailyDisplayFormat`        | `string`  | `inherit`            | Status bar format for the daily view: `inherit` (follow `displayFormat`), `remaining`, `fraction`, or `percent`. |
-| `defaultView`               | `string`  | `total`              | View the status bar starts in: `total` or `daily`. Toggle at runtime with the toggle command. |
-| `usageDays`                 | `array`   | `["monday"…"friday"]`| Days of the week you actually use the AI (may include weekends). Drives the daily calculations. |
-| `dailyBudgetStrategy`       | `string`  | `dynamic`            | How the recommended spend per usage day is computed: `dynamic` or `static`.      |
-| `warningRemainingPercent`   | `number`  | `20`                 | Warning background when remaining usage is at or below this percent (`0`–`100`). |
-| `criticalRemainingPercent`  | `number`  | `10`                 | Error background when remaining usage is at or below this percent (`0`–`100`).   |
-| `enableLocalTokenDiscovery` | `boolean` | `true`               | Read Cursor `state.vscdb` to discover session token and user id.                 |
+### Status Bar
 
-### Display formats
+| Setting | Type | Default | Description |
+| ------- | ---- | ------- | ----------- |
+| `statusBarDisplay` | `string` | `totalRemaining` | Unified status bar: `totalRemaining`, `totalFraction`, `totalPercent`, `dailyRemaining`, `dailyFraction`, `dailyPercent`. **Toggle Daily / Total View** switches period while keeping format. |
 
-The same three formats apply to both views (`displayFormat` for the total view, `dailyDisplayFormat` for the daily view).
+### Daily Pacing
 
-**Total view** (period usage):
+| Setting | Type | Default | Description |
+| ------- | ---- | ------- | ----------- |
+| `usageDays` | `array` | `["monday"…"friday"]` | Weekdays you actually use the AI (add weekends if you work then). Drives elapsed/remaining usage days and the recommended daily budget. |
+| `dailyBudgetStrategy` | `string` | `dynamic` | Formula for recommended spend per usage day: `dynamic` (`remaining ÷ remaining usage days`) or `static` (`limit ÷ total usage days in the period`). |
 
-- **`remaining`** (default) — e.g. `$42.50 left`, or `$12.00 used` if no limit is known.
-- **`fraction`** — e.g. `$57.50 / $100.00` (used / limit).
-- **`percent`** — e.g. `43% left` when a limit is available.
+### Low-Budget Alerts
 
-**Daily view** (per usage day):
+| Setting | Type | Default | Description |
+| ------- | ---- | ------- | ----------- |
+| `warningRemainingPercent` | `number` | `20` | Status bar background turns **warning** when remaining budget drops to this percent or below (`0`–`100`). |
+| `criticalRemainingPercent` | `number` | `10` | Status bar background turns **error** when remaining budget drops to this percent or below. Should be lower than `warningRemainingPercent`. |
 
-- **`remaining`** — daily headroom, e.g. `$3.33/day left` (or `$1.20/day over` when your average pace exceeds the budget).
-- **`fraction`** — e.g. `$5.22 / $8.55 per day` (average so far / recommended).
-- **`percent`** — e.g. `39% left` (percent of the daily budget still free).
+### Data & Authentication
+
+| Setting | Type | Default | Description |
+| ------- | ---- | ------- | ----------- |
+| `pollIntervalSeconds` | `number` | `300` | How often to fetch fresh usage from the Cursor API in the background (minimum `60` seconds). |
+| `apiBaseUrl` | `string` | `https://cursor.com` | HTTPS origin for `GET /api/usage-summary`. Session cookie is sent only to this host. **Machine** scoped — user settings only. |
+| `enableLocalTokenDiscovery` | `boolean` | `true` | Read Cursor login from local `state.vscdb` for automatic auth. Disable to paste a token with **Set Token**. **Machine** scoped. |
+
+
+### Display formats (`statusBarDisplay`)
+
+Six values combine **view** (monthly period vs. daily pacing) and **format**:
+
+| Value | What you see |
+| ----- | ------------ |
+| `totalRemaining` (default) | Period remaining, e.g. dollars left |
+| `totalFraction` | Period used vs. limit |
+| `totalPercent` | Percent of period budget left |
+| `dailyRemaining` | Daily headroom per usage day |
+| `dailyFraction` | Average vs. recommended per day |
+| `dailyPercent` | Percent of daily budget left |
+
+**Toggle Daily / Total View** keeps the format (remaining, fraction, or percent) and only switches monthly vs. daily pacing.
 
 ## Daily usage view
 
@@ -167,10 +184,12 @@ code --install-extension cursor-usage-for-teams-0.2.0.vsix
 
 In Cursor, use **Extensions: Install from VSIX…** from the Command Palette if `code` is not on your PATH.
 
-Security
-Credentials stay local — Session tokens read from state.vscdb are not written to disk by the extension except when you explicitly use Set Token (Secret Storage only).
-HTTPS only — apiBaseUrl must use https://; non-HTTPS origins are rejected.
-Minimal network surface — The extension calls the configured Cursor origin (default GET https://cursor.com/api/usage-summary) with your session cookie; it does not send usage data elsewhere.
-Secrets API — Manually entered tokens use VS Code Secret Storage, not workspace settings or settings.json.
-Your responsibility — Tokens grant access to your Cursor account; do not share VSIX bundles or token exports. Disable enableLocalTokenDiscovery if you prefer to supply tokens only via Set Token.
+## Security
+
+- **Credentials stay local** — Session tokens read from state.vscdb are not written to disk by the extension except when you explicitly use Set Token (Secret Storage only).
+- **HTTPS only** — `apiBaseUrl` must use `https://`; non-HTTPS origins are rejected.
+- **Minimal network surface** — The extension calls the configured Cursor origin (default `GET https://cursor.com/api/usage-summary`) with your session cookie; it does not send usage data elsewhere.
+- **Secrets API** — Manually entered tokens use VS Code Secret Storage, not workspace settings or `settings.json`.
+- **Your responsibility** — Tokens grant access to your Cursor account; do not share VSIX bundles or token exports. Disable `enableLocalTokenDiscovery` if you prefer to supply tokens only via Set Token.
+
 This extension is unofficial and not affiliated with Cursor.

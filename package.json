@@ -38,120 +38,130 @@
         "title": "Cursor Monthly Usage: Toggle Daily / Total View"
       }
     ],
-    "configuration": {
-      "title": "Cursor Monthly Usage",
-      "properties": {
-        "cursorUsageForTeams.apiBaseUrl": {
-          "type": "string",
-          "default": "https://cursor.com",
-          "scope": "machine",
-          "markdownDescription": "Cursor web API origin for usage-summary requests. Must be HTTPS. Your session cookie is sent to this origin, so this is `machine` scoped — it can only be set in user settings, never overridden by a workspace."
-        },
-        "cursorUsageForTeams.pollIntervalSeconds": {
-          "type": "number",
-          "default": 300,
-          "minimum": 60,
-          "description": "How often to refresh usage in the background."
-        },
-        "cursorUsageForTeams.displayFormat": {
-          "type": "string",
-          "default": "remaining",
-          "enum": [
-            "remaining",
-            "fraction",
-            "percent"
-          ],
-          "description": "Status bar format for the total (period) view."
-        },
-        "cursorUsageForTeams.dailyDisplayFormat": {
-          "type": "string",
-          "default": "inherit",
-          "enum": [
-            "inherit",
-            "remaining",
-            "fraction",
-            "percent"
-          ],
-          "enumDescriptions": [
-            "Use the same format as displayFormat.",
-            "Daily headroom, e.g. $3.33/day left.",
-            "Average vs recommended, e.g. $5.22 / $8.55 per day.",
-            "Percent of the daily budget left, e.g. 39% left."
-          ],
-          "description": "Status bar format for the daily (per-usage-day) view. 'inherit' follows displayFormat."
-        },
-        "cursorUsageForTeams.defaultView": {
-          "type": "string",
-          "default": "total",
-          "enum": [
-            "total",
-            "daily"
-          ],
-          "enumDescriptions": [
-            "Show the period total (used/limit/remaining).",
-            "Show the per-usage-day pacing insight."
-          ],
-          "description": "Which view the status bar starts in. Toggle at runtime with the Toggle Daily / Total View command."
-        },
-        "cursorUsageForTeams.usageDays": {
-          "type": "array",
-          "default": [
-            "monday",
-            "tuesday",
-            "wednesday",
-            "thursday",
-            "friday"
-          ],
-          "items": {
+    "configuration": [
+      {
+        "title": "Status Bar",
+        "order": 0,
+        "properties": {
+          "cursorUsageForTeams.statusBarDisplay": {
             "type": "string",
+            "default": "totalRemaining",
+            "order": 1,
             "enum": [
-              "sunday",
+              "totalRemaining",
+              "totalFraction",
+              "totalPercent",
+              "dailyRemaining",
+              "dailyFraction",
+              "dailyPercent"
+            ],
+            "enumDescriptions": [
+              "Monthly period remaining dollars.",
+              "Monthly period used vs. limit fraction.",
+              "Monthly period percent of budget left.",
+              "Daily pacing daily headroom.",
+              "Daily pacing average vs. recommended per day.",
+              "Daily pacing percent of daily budget left."
+            ],
+            "markdownDescription": "One setting for what the status bar shows and how numbers are formatted. Pick monthly or daily pacing plus remaining, fraction, or percent. Use Cursor Monthly Usage: Toggle Daily / Total View to switch between monthly and daily while keeping the same format (no extra API call)."
+          }
+        }
+      },
+      {
+        "title": "Daily Pacing",
+        "order": 1,
+        "properties": {
+          "cursorUsageForTeams.usageDays": {
+            "type": "array",
+            "default": [
               "monday",
               "tuesday",
               "wednesday",
               "thursday",
-              "friday",
-              "saturday"
-            ]
+              "friday"
+            ],
+            "order": 1,
+            "items": {
+              "type": "string",
+              "enum": [
+                "sunday",
+                "monday",
+                "tuesday",
+                "wednesday",
+                "thursday",
+                "friday",
+                "saturday"
+              ]
+            },
+            "uniqueItems": true,
+            "markdownDescription": "Weekdays you actually use the AI (add weekends if you work then). The extension counts only these days when computing elapsed/remaining usage days and the recommended daily budget. Empty or invalid values fall back to Monday\u2013Friday."
           },
-          "uniqueItems": true,
-          "description": "Days of the week you actually use the AI (may include weekends). Used to compute the recommended and average spend per usage day. Empty/invalid falls back to Monday–Friday."
-        },
-        "cursorUsageForTeams.dailyBudgetStrategy": {
-          "type": "string",
-          "default": "dynamic",
-          "enum": [
-            "dynamic",
-            "static"
-          ],
-          "enumDescriptions": [
-            "Recommended per day = remaining / remaining usage days. Self-corrects your pace.",
-            "Recommended per day = limit / total usage days in the period. Fixed monthly target."
-          ],
-          "description": "How the recommended spend per usage day is calculated for the daily view."
-        },
-        "cursorUsageForTeams.warningRemainingPercent": {
-          "type": "number",
-          "default": 20,
-          "minimum": 0,
-          "maximum": 100,
-          "description": "Warn when remaining usage is at or below this percent."
-        },
-        "cursorUsageForTeams.criticalRemainingPercent": {
-          "type": "number",
-          "default": 10,
-          "minimum": 0,
-          "maximum": 100,
-          "description": "Show an error color when remaining usage is at or below this percent."
-        },
-        "cursorUsageForTeams.enableLocalTokenDiscovery": {
-          "type": "boolean",
-          "default": true,
-          "scope": "machine",
-          "description": "Read Cursor local state.vscdb to find the session token and user id. Machine scoped so a workspace cannot toggle local credential discovery."
+          "cursorUsageForTeams.dailyBudgetStrategy": {
+            "type": "string",
+            "default": "dynamic",
+            "order": 2,
+            "enum": [
+              "dynamic",
+              "static"
+            ],
+            "enumDescriptions": [
+              "**Dynamic** \u2014 `remaining \u00f7 remaining usage days`. Adjusts as you spend so you finish the period on budget.",
+              "**Static** \u2014 `limit \u00f7 total usage days in the period`. A fixed daily target for the whole month."
+            ],
+            "markdownDescription": "Formula for **recommended spend per usage day** in the daily pacing view."
+          }
+        }
+      },
+      {
+        "title": "Low-Budget Alerts",
+        "order": 2,
+        "properties": {
+          "cursorUsageForTeams.warningRemainingPercent": {
+            "type": "number",
+            "default": 20,
+            "minimum": 0,
+            "maximum": 100,
+            "order": 1,
+            "markdownDescription": "Status bar background turns **warning** when the remaining budget drops to this percent or below \u2014 in the **total** view (period remaining) or the **daily** view (daily headroom)."
+          },
+          "cursorUsageForTeams.criticalRemainingPercent": {
+            "type": "number",
+            "default": 10,
+            "minimum": 0,
+            "maximum": 100,
+            "order": 2,
+            "markdownDescription": "Status bar background turns **error** when the remaining budget drops to this percent or below. Should be lower than **Warning Remaining Percent**."
+          }
+        }
+      },
+      {
+        "title": "Data & Authentication",
+        "order": 3,
+        "properties": {
+          "cursorUsageForTeams.pollIntervalSeconds": {
+            "type": "number",
+            "default": 300,
+            "minimum": 60,
+            "order": 1,
+            "markdownDescription": "How often to fetch fresh usage from the Cursor API in the background (minimum 60 seconds)."
+          },
+          "cursorUsageForTeams.apiBaseUrl": {
+            "type": "string",
+            "default": "https://cursor.com",
+            "scope": "machine",
+            "order": 2,
+            "markdownDescription": "HTTPS origin for `GET /api/usage-summary`. Your session cookie is sent only to this host. **Machine** scoped \u2014 set in user settings only, never overridden by a workspace. Change only if you trust the origin."
+          },
+          "cursorUsageForTeams.enableLocalTokenDiscovery": {
+            "type": "boolean",
+            "default": true,
+            "scope": "machine",
+            "order": 3,
+            "markdownDescription": "Read your Cursor login from local `state.vscdb` so the extension can authenticate automatically. Disable if you prefer to paste a token with **Cursor Monthly Usage: Set Token**. **Machine** scoped so a workspace cannot toggle credential discovery."
+          }
         }
       }
-    }
+    ]
   },
   "scripts": {
     "compile": "tsc -p ./",
