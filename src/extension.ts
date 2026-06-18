@@ -4,6 +4,13 @@ import * as path from "path";
 import { existsSync } from "fs";
 import { readFile } from "fs/promises";
 import initSqlJs, { type SqlJsStatic } from "sql.js";
+import {
+  computeDailyInsight,
+  normalizeUsageDays,
+  DEFAULT_USAGE_DAYS,
+  type DailyBudgetStrategy,
+  type DailyInsight,
+} from "./dailyInsight";
 
 const secretKey = "cursorUsageForTeams.accessToken";
 let sqlJs: Promise<SqlJsStatic> | undefined;
@@ -12,20 +19,6 @@ let extensionPath: string | undefined;
 type DisplayFormat = "remaining" | "fraction" | "percent";
 type DailyDisplayFormat = DisplayFormat | "inherit";
 type ViewMode = "total" | "daily";
-type DailyBudgetStrategy = "dynamic" | "static";
-
-type DailyInsight = {
-  recommendedPerDay?: number; // cents — undefined when limit/period unknown
-  consumptionPerDay: number; // cents — average = used / usageDaysElapsed
-  headroomPerDay?: number; // recommendedPerDay - consumptionPerDay (may be < 0)
-  percentRemainingOfBudget?: number; // headroom / recommendedPerDay * 100
-  usageDaysTotal: number;
-  usageDaysElapsed: number;
-  usageDaysRemaining: number; // includes today when today is a usage day
-  strategy: DailyBudgetStrategy;
-  todayIsUsageDay: boolean;
-  usedFallbackPeriod: boolean;
-};
 
 type StatusBarModel = {
   icon: string;
@@ -249,50 +242,44 @@ async function fetchUsageSnapshot(
   warnIfUnexpectedApiHost(webBase);
   const usageSummaryUrl = new URL("/api/usage-summary", webBase);
 
-  const attempts: Array<Promise<UsageEndpointResult>> = [
-    requestJson(usageSummaryUrl, {
-      method: "GET",
-      headers: {
-        Cookie: buildSessionCookieHeader(auth),
-      },
-    }),
-  ];
-
-  const results = await Promise.all(attempts);
-  const payloads = results.flatMap((result) =>
-    result.payload !== undefined ? [result.payload] : [],
-  );
-  const snapshots = results.flatMap((result) => {
-    if (result.payload === undefined) {
-      return [];
-    }
-
-    const parsed =
-      parseDashboardUsage(result.payload) ??
-parseGenericUsage(result.payload, result.endpoint);
-    return parsed ? [parsed] : [];
+  const result = await requestJson(usageSummaryUrl, {
+    method: "GET",
+    headers: {
+      Cookie: buildSessionCookieHeader(auth),
+    },
   });
 
-  const snapshot = snapshots[0];
+  const snapshot =
+    result.payload !== undefined
+      ? (parseDashboardUsage(result.payload) ??
+        parseGenericUsage(result.payload, result.endpoint))
+      : undefined;
+
   if (!snapshot) {
     throw new Error(
-      `Cursor usage API returned an unrecognized response. ${summarizeEndpointResults(results)}`,
+      `Cursor usage API returned an unrecognized response. ${summarizeEndpointResults([result])}`,
     );
   }
 
-  snapshot.rawHighlights = collectHighlights(payloads);
+  snapshot.rawHighlights = collectHighlights(
+    result.payload !== undefined ? [result.payload] : [],
+  );
   snapshot.refreshedAt = new Date();
   return snapshot;
 }
+
+const REQUEST_TIMEOUT_MS = 15000;
 
 async function requestJson(
   url: URL,
   init: RequestInit,
 ): Promise<UsageEndpointResult> {
   const endpoint = url.pathname;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
   try {
-    const response = await fetch(url, init);
+    const response = await fetch(url, { ...init, signal: controller.signal });
     const text = await response.text();
     const base = {
       endpoint,
@@ -318,11 +305,15 @@ async function requestJson(
 
     return { ...base, payload };
   } catch (error) {
-    return {
-      endpoint,
-      ok: false,
-      diagnostic: error instanceof Error ? error.message : "request failed",
-    };
+    const diagnostic =
+      error instanceof Error && error.name === "AbortError"
+        ? `request timed out after ${REQUEST_TIMEOUT_MS / 1000}s`
+        : error instanceof Error
+          ? error.message
+          : "request failed";
+    return { endpoint, ok: false, diagnostic };
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -484,69 +475,8 @@ function completeSnapshot(snapshot: UsageSnapshot): UsageSnapshot {
   return snapshot;
 }
 
-const WEEKDAY_INDEX: Record<string, number> = {
-  sunday: 0,
-  monday: 1,
-  tuesday: 2,
-  wednesday: 3,
-  thursday: 4,
-  friday: 5,
-  saturday: 6,
-};
-const DEFAULT_USAGE_DAYS = [1, 2, 3, 4, 5];
-
 function parseUsageDays(): Set<number> {
-  const configured = getConfig<unknown>("usageDays", DEFAULT_USAGE_DAYS);
-  const days = new Set<number>();
-
-  if (Array.isArray(configured)) {
-    for (const entry of configured) {
-      if (typeof entry === "string") {
-        const index = WEEKDAY_INDEX[entry.trim().toLowerCase()];
-        if (index !== undefined) {
-          days.add(index);
-        }
-      } else if (
-        typeof entry === "number" &&
-        Number.isInteger(entry) &&
-        entry >= 0 &&
-        entry <= 6
-      ) {
-        days.add(entry);
-      }
-    }
-  }
-
-  if (days.size === 0) {
-    for (const day of DEFAULT_USAGE_DAYS) {
-      days.add(day);
-    }
-  }
-
-  return days;
-}
-
-// Counts calendar days in [from, to) whose weekday is a usage day. Dates are
-// handled in UTC so counts align with the (UTC) billing period boundaries and
-// stay independent of the machine timezone.
-function countUsageDays(from: Date, to: Date, days: Set<number>): number {
-  if (!(from.getTime() < to.getTime())) {
-    return 0;
-  }
-
-  let count = 0;
-  const cursor = new Date(
-    Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate()),
-  );
-  const end = to.getTime();
-  while (cursor.getTime() < end) {
-    if (days.has(cursor.getUTCDay())) {
-      count += 1;
-    }
-    cursor.setUTCDate(cursor.getUTCDate() + 1);
-  }
-
-  return count;
+  return normalizeUsageDays(getConfig<unknown>("usageDays", DEFAULT_USAGE_DAYS));
 }
 
 function resolveDailyBudgetStrategy(): DailyBudgetStrategy {
@@ -556,108 +486,20 @@ function resolveDailyBudgetStrategy(): DailyBudgetStrategy {
     : "dynamic";
 }
 
-function computeRecommendedPerDay(
-  snapshot: UsageSnapshot,
-  strategy: DailyBudgetStrategy,
-  counts: { usageDaysTotal: number; usageDaysRemaining: number },
-): number | undefined {
-  if (strategy === "static") {
-    if (snapshot.limit === undefined || counts.usageDaysTotal <= 0) {
-      return undefined;
-    }
-    return snapshot.limit / counts.usageDaysTotal;
-  }
-
-  // dynamic: pace the remaining balance across the usage days still ahead.
-  if (snapshot.remaining === undefined) {
-    return undefined;
-  }
-  if (counts.usageDaysRemaining <= 0) {
-    return snapshot.remaining;
-  }
-  return snapshot.remaining / counts.usageDaysRemaining;
-}
-
-function computeDailyInsight(
-  snapshot: UsageSnapshot,
-): DailyInsight | undefined {
-  const usageDays = parseUsageDays();
-  const now = new Date();
-
-  let usedFallbackPeriod = false;
-  let start = snapshot.periodStart ? new Date(snapshot.periodStart) : undefined;
-  let end = snapshot.periodEnd ? new Date(snapshot.periodEnd) : undefined;
-  if (
-    !start ||
-    Number.isNaN(start.getTime()) ||
-    !end ||
-    Number.isNaN(end.getTime()) ||
-    !(start.getTime() < end.getTime())
-  ) {
-    start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-    end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
-    usedFallbackPeriod = true;
-  }
-
-  const startOfToday = new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
-  );
-  const startOfTomorrow = new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1),
-  );
-
-  const usageDaysTotal = countUsageDays(start, end, usageDays);
-  // Elapsed counts usage days from the period start up to and including today.
-  const elapsedEnd =
-    startOfTomorrow.getTime() < end.getTime() ? startOfTomorrow : end;
-  const usageDaysElapsed = countUsageDays(start, elapsedEnd, usageDays);
-  // Remaining counts usage days from today onward (today is still spendable).
-  const remainingStart =
-    startOfToday.getTime() > start.getTime() ? startOfToday : start;
-  const usageDaysRemaining = countUsageDays(remainingStart, end, usageDays);
-
-  const todayIsUsageDay =
-    usageDays.has(now.getUTCDay()) &&
-    startOfToday.getTime() >= start.getTime() &&
-    startOfToday.getTime() < end.getTime();
-
-  const consumptionPerDay =
-    usageDaysElapsed > 0 ? snapshot.used / usageDaysElapsed : snapshot.used;
-
-  const strategy = resolveDailyBudgetStrategy();
-  const recommendedPerDay = computeRecommendedPerDay(snapshot, strategy, {
-    usageDaysTotal,
-    usageDaysRemaining,
+// Thin wrapper that feeds the pure pacing math (see ./dailyInsight) with values
+// resolved from configuration and the current clock.
+function buildInsight(snapshot: UsageSnapshot): DailyInsight {
+  return computeDailyInsight(snapshot, {
+    usageDays: parseUsageDays(),
+    strategy: resolveDailyBudgetStrategy(),
+    now: new Date(),
   });
-
-  let headroomPerDay: number | undefined;
-  let percentRemainingOfBudget: number | undefined;
-  if (recommendedPerDay !== undefined) {
-    headroomPerDay = recommendedPerDay - consumptionPerDay;
-    percentRemainingOfBudget =
-      recommendedPerDay > 0
-        ? (headroomPerDay / recommendedPerDay) * 100
-        : undefined;
-  }
-
-  return {
-    recommendedPerDay,
-    consumptionPerDay,
-    headroomPerDay,
-    percentRemainingOfBudget,
-    usageDaysTotal,
-    usageDaysElapsed,
-    usageDaysRemaining,
-    strategy,
-    todayIsUsageDay,
-    usedFallbackPeriod,
-  };
 }
 
 
 function renderSnapshot(snapshot: UsageSnapshot) {
   const displayFormat = getConfig<DisplayFormat>("displayFormat", "remaining");
-  const insight = computeDailyInsight(snapshot);
+  const insight = buildInsight(snapshot);
 
   // Daily view needs a computable budget; otherwise fall back to the total view.
   const model =
@@ -874,7 +716,7 @@ async function showDetails() {
     return;
   }
 
-  const insight = computeDailyInsight(lastSnapshot);
+  const insight = buildInsight(lastSnapshot);
   const toggleLabel = `$(arrow-swap) Toggle daily / total view (now: ${activeView})`;
 
   const lines = [

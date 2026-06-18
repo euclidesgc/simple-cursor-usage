@@ -161,13 +161,16 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "vscode:prepublish": "npm run compile"
   },
   "devDependencies": {
     "@types/node": "^20.11.30",
+    "@types/sql.js": "^1.4.11",
     "@types/vscode": "^1.90.0",
     "typescript": "^5.4.5",
-    "@types/sql.js": "^1.4.11"
+    "vitest": "^2.1.9"
   },
   "dependencies": {
     "sql.js": "^1.14.1"
