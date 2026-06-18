@@ -10,6 +10,28 @@ let sqlJs: Promise<SqlJsStatic> | undefined;
 let extensionPath: string | undefined;
 
 type DisplayFormat = "remaining" | "fraction" | "percent";
+type DailyDisplayFormat = DisplayFormat | "inherit";
+type ViewMode = "total" | "daily";
+type DailyBudgetStrategy = "dynamic" | "static";
+
+type DailyInsight = {
+  recommendedPerDay?: number; // cents — undefined when limit/period unknown
+  consumptionPerDay: number; // cents — average = used / usageDaysElapsed
+  headroomPerDay?: number; // recommendedPerDay - consumptionPerDay (may be < 0)
+  percentRemainingOfBudget?: number; // headroom / recommendedPerDay * 100
+  usageDaysTotal: number;
+  usageDaysElapsed: number;
+  usageDaysRemaining: number; // includes today when today is a usage day
+  strategy: DailyBudgetStrategy;
+  todayIsUsageDay: boolean;
+  usedFallbackPeriod: boolean;
+};
+
+type StatusBarModel = {
+  icon: string;
+  value: string;
+  percentForColor?: number;
+};
 
 type UsageSnapshot = {
   source: string;
@@ -39,13 +61,19 @@ type CursorSessionAuth = {
   rawAccessToken?: string;
 };
 
+const viewStateKey = "cursorUsageForTeams.activeView";
+
 let statusBar: vscode.StatusBarItem;
 let refreshTimer: NodeJS.Timeout | undefined;
 let lastSnapshot: UsageSnapshot | undefined;
 let lastError: string | undefined;
+let activeView: ViewMode = "total";
+let viewMemento: vscode.Memento | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
   extensionPath = context.extensionPath;
+  viewMemento = context.globalState;
+  activeView = resolveInitialView();
   statusBar = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Right,
     98,
@@ -69,6 +97,9 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("cursorUsageForTeams.clearToken", () =>
       clearToken(context),
     ),
+    vscode.commands.registerCommand("cursorUsageForTeams.toggleView", () =>
+      toggleView(),
+    ),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration("cursorUsageForTeams")) {
         scheduleRefresh(context);
@@ -84,6 +115,31 @@ export function activate(context: vscode.ExtensionContext) {
 export function deactivate() {
   if (refreshTimer) {
     clearInterval(refreshTimer);
+  }
+}
+
+function resolveInitialView(): ViewMode {
+  const stored = viewMemento?.get<ViewMode>(viewStateKey);
+  if (stored === "total" || stored === "daily") {
+    return stored;
+  }
+
+  return getConfig<ViewMode>("defaultView", "total") === "daily"
+    ? "daily"
+    : "total";
+}
+
+async function toggleView() {
+  activeView = activeView === "daily" ? "total" : "daily";
+  await viewMemento?.update(viewStateKey, activeView);
+
+  // Toggling is presentation-only — re-render the data we already have.
+  if (lastSnapshot) {
+    renderSnapshot(lastSnapshot);
+  } else if (lastError) {
+    renderError();
+  } else {
+    setLoading();
   }
 }
 
@@ -427,32 +483,247 @@ function completeSnapshot(snapshot: UsageSnapshot): UsageSnapshot {
   return snapshot;
 }
 
+const WEEKDAY_INDEX: Record<string, number> = {
+  sunday: 0,
+  monday: 1,
+  tuesday: 2,
+  wednesday: 3,
+  thursday: 4,
+  friday: 5,
+  saturday: 6,
+};
+const DEFAULT_USAGE_DAYS = [1, 2, 3, 4, 5];
+
+function parseUsageDays(): Set<number> {
+  const configured = getConfig<unknown>("usageDays", DEFAULT_USAGE_DAYS);
+  const days = new Set<number>();
+
+  if (Array.isArray(configured)) {
+    for (const entry of configured) {
+      if (typeof entry === "string") {
+        const index = WEEKDAY_INDEX[entry.trim().toLowerCase()];
+        if (index !== undefined) {
+          days.add(index);
+        }
+      } else if (
+        typeof entry === "number" &&
+        Number.isInteger(entry) &&
+        entry >= 0 &&
+        entry <= 6
+      ) {
+        days.add(entry);
+      }
+    }
+  }
+
+  if (days.size === 0) {
+    for (const day of DEFAULT_USAGE_DAYS) {
+      days.add(day);
+    }
+  }
+
+  return days;
+}
+
+// Counts calendar days in [from, to) whose weekday is a usage day. Dates are
+// handled in UTC so counts align with the (UTC) billing period boundaries and
+// stay independent of the machine timezone.
+function countUsageDays(from: Date, to: Date, days: Set<number>): number {
+  if (!(from.getTime() < to.getTime())) {
+    return 0;
+  }
+
+  let count = 0;
+  const cursor = new Date(
+    Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate()),
+  );
+  const end = to.getTime();
+  while (cursor.getTime() < end) {
+    if (days.has(cursor.getUTCDay())) {
+      count += 1;
+    }
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+
+  return count;
+}
+
+function resolveDailyBudgetStrategy(): DailyBudgetStrategy {
+  return getConfig<DailyBudgetStrategy>("dailyBudgetStrategy", "dynamic") ===
+    "static"
+    ? "static"
+    : "dynamic";
+}
+
+function computeRecommendedPerDay(
+  snapshot: UsageSnapshot,
+  strategy: DailyBudgetStrategy,
+  counts: { usageDaysTotal: number; usageDaysRemaining: number },
+): number | undefined {
+  if (strategy === "static") {
+    if (snapshot.limit === undefined || counts.usageDaysTotal <= 0) {
+      return undefined;
+    }
+    return snapshot.limit / counts.usageDaysTotal;
+  }
+
+  // dynamic: pace the remaining balance across the usage days still ahead.
+  if (snapshot.remaining === undefined) {
+    return undefined;
+  }
+  if (counts.usageDaysRemaining <= 0) {
+    return snapshot.remaining;
+  }
+  return snapshot.remaining / counts.usageDaysRemaining;
+}
+
+function computeDailyInsight(
+  snapshot: UsageSnapshot,
+): DailyInsight | undefined {
+  const usageDays = parseUsageDays();
+  const now = new Date();
+
+  let usedFallbackPeriod = false;
+  let start = snapshot.periodStart ? new Date(snapshot.periodStart) : undefined;
+  let end = snapshot.periodEnd ? new Date(snapshot.periodEnd) : undefined;
+  if (
+    !start ||
+    Number.isNaN(start.getTime()) ||
+    !end ||
+    Number.isNaN(end.getTime()) ||
+    !(start.getTime() < end.getTime())
+  ) {
+    start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+    usedFallbackPeriod = true;
+  }
+
+  const startOfToday = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+  );
+  const startOfTomorrow = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1),
+  );
+
+  const usageDaysTotal = countUsageDays(start, end, usageDays);
+  // Elapsed counts usage days from the period start up to and including today.
+  const elapsedEnd =
+    startOfTomorrow.getTime() < end.getTime() ? startOfTomorrow : end;
+  const usageDaysElapsed = countUsageDays(start, elapsedEnd, usageDays);
+  // Remaining counts usage days from today onward (today is still spendable).
+  const remainingStart =
+    startOfToday.getTime() > start.getTime() ? startOfToday : start;
+  const usageDaysRemaining = countUsageDays(remainingStart, end, usageDays);
+
+  const todayIsUsageDay =
+    usageDays.has(now.getUTCDay()) &&
+    startOfToday.getTime() >= start.getTime() &&
+    startOfToday.getTime() < end.getTime();
+
+  const consumptionPerDay =
+    usageDaysElapsed > 0 ? snapshot.used / usageDaysElapsed : snapshot.used;
+
+  const strategy = resolveDailyBudgetStrategy();
+  const recommendedPerDay = computeRecommendedPerDay(snapshot, strategy, {
+    usageDaysTotal,
+    usageDaysRemaining,
+  });
+
+  let headroomPerDay: number | undefined;
+  let percentRemainingOfBudget: number | undefined;
+  if (recommendedPerDay !== undefined) {
+    headroomPerDay = recommendedPerDay - consumptionPerDay;
+    percentRemainingOfBudget =
+      recommendedPerDay > 0
+        ? (headroomPerDay / recommendedPerDay) * 100
+        : undefined;
+  }
+
+  return {
+    recommendedPerDay,
+    consumptionPerDay,
+    headroomPerDay,
+    percentRemainingOfBudget,
+    usageDaysTotal,
+    usageDaysElapsed,
+    usageDaysRemaining,
+    strategy,
+    todayIsUsageDay,
+    usedFallbackPeriod,
+  };
+}
+
 
 function renderSnapshot(snapshot: UsageSnapshot) {
   const displayFormat = getConfig<DisplayFormat>("displayFormat", "remaining");
-  const value = formatSnapshotValue(snapshot, displayFormat);
-  statusBar.text = `$(pulse) ${value}`;
-  statusBar.tooltip = buildTooltip(snapshot);
-  statusBar.backgroundColor = undefined;
+  const insight = computeDailyInsight(snapshot);
+
+  // Daily view needs a computable budget; otherwise fall back to the total view.
+  const model =
+    activeView === "daily" && insight && insight.recommendedPerDay !== undefined
+      ? buildDailyModel(insight, resolveDailyDisplayFormat(displayFormat))
+      : buildTotalModel(snapshot, displayFormat);
+
+  statusBar.text = `$(${model.icon}) ${model.value}`;
+  statusBar.tooltip = buildTooltip(snapshot, insight);
+  statusBar.backgroundColor = colorForPercent(model.percentForColor);
+}
+
+function buildTotalModel(
+  snapshot: UsageSnapshot,
+  displayFormat: DisplayFormat,
+): StatusBarModel {
+  return {
+    icon: "pulse",
+    value: formatSnapshotValue(snapshot, displayFormat),
+    percentForColor: snapshot.percentRemaining,
+  };
+}
+
+function buildDailyModel(
+  insight: DailyInsight,
+  displayFormat: DisplayFormat,
+): StatusBarModel {
+  return {
+    icon: "calendar",
+    value: formatDailyValue(insight, displayFormat),
+    percentForColor: insight.percentRemainingOfBudget,
+  };
+}
+
+function resolveDailyDisplayFormat(totalFormat: DisplayFormat): DisplayFormat {
+  const configured = getConfig<DailyDisplayFormat>(
+    "dailyDisplayFormat",
+    "inherit",
+  );
+  if (
+    configured === "remaining" ||
+    configured === "fraction" ||
+    configured === "percent"
+  ) {
+    return configured;
+  }
+  return totalFormat;
+}
+
+function colorForPercent(
+  percent: number | undefined,
+): vscode.ThemeColor | undefined {
+  if (percent === undefined) {
+    return undefined;
+  }
 
   const warning = getConfig<number>("warningRemainingPercent", 20);
   const critical = getConfig<number>("criticalRemainingPercent", 10);
 
-  if (
-    snapshot.percentRemaining !== undefined &&
-    snapshot.percentRemaining <= critical
-  ) {
-    statusBar.backgroundColor = new vscode.ThemeColor(
-      "statusBarItem.errorBackground",
-    );
-  } else if (
-    snapshot.percentRemaining !== undefined &&
-    snapshot.percentRemaining <= warning
-  ) {
-    statusBar.backgroundColor = new vscode.ThemeColor(
-      "statusBarItem.warningBackground",
-    );
+  if (percent <= critical) {
+    return new vscode.ThemeColor("statusBarItem.errorBackground");
   }
+  if (percent <= warning) {
+    return new vscode.ThemeColor("statusBarItem.warningBackground");
+  }
+
+  return undefined;
 }
 
 function formatSnapshotValue(
@@ -474,7 +745,38 @@ function formatSnapshotValue(
   return `${formatUsageValue(snapshot.used)} used`;
 }
 
-function buildTooltip(snapshot: UsageSnapshot): vscode.MarkdownString {
+function formatDailyValue(
+  insight: DailyInsight,
+  displayFormat: DisplayFormat,
+): string {
+  const recommended = insight.recommendedPerDay ?? 0;
+
+  if (displayFormat === "fraction") {
+    return `${formatUsageValue(insight.consumptionPerDay)} / ${formatUsageValue(recommended)} per day`;
+  }
+
+  if (displayFormat === "percent") {
+    if (insight.percentRemainingOfBudget === undefined) {
+      return `${formatUsageValue(insight.consumptionPerDay)} per day`;
+    }
+    if (insight.percentRemainingOfBudget < 0) {
+      return "over daily budget";
+    }
+    return `${Math.round(insight.percentRemainingOfBudget)}% left`;
+  }
+
+  // "remaining" → daily headroom (recommended minus your average pace).
+  const headroom = insight.headroomPerDay ?? 0;
+  if (headroom < 0) {
+    return `${formatUsageValue(Math.abs(headroom))}/day over`;
+  }
+  return `${formatUsageValue(headroom)}/day left`;
+}
+
+function buildTooltip(
+  snapshot: UsageSnapshot,
+  insight: DailyInsight | undefined,
+): vscode.MarkdownString {
   const tooltip = new vscode.MarkdownString(undefined, true);
   tooltip.isTrusted = false;
   tooltip.appendMarkdown("**Cursor Monthly Usage**\n\n");
@@ -501,8 +803,48 @@ function buildTooltip(snapshot: UsageSnapshot): vscode.MarkdownString {
   if (snapshot.periodEnd) {
     tooltip.appendMarkdown(`Period end: ${snapshot.periodEnd}\n\n`);
   }
+  appendDailyTooltip(tooltip, insight);
   tooltip.appendMarkdown(`Refreshed: ${snapshot.refreshedAt.toLocaleString()}`);
   return tooltip;
+}
+
+function appendDailyTooltip(
+  tooltip: vscode.MarkdownString,
+  insight: DailyInsight | undefined,
+) {
+  if (!insight) {
+    return;
+  }
+
+  tooltip.appendMarkdown(`---\n\n`);
+  tooltip.appendMarkdown(`**Per usage day** (${insight.strategy})\n\n`);
+  tooltip.appendMarkdown(
+    insight.recommendedPerDay !== undefined
+      ? `Recommended: ${formatUsageValue(insight.recommendedPerDay)} / usage day\n\n`
+      : `Recommended: — (no limit/period available)\n\n`,
+  );
+  tooltip.appendMarkdown(
+    `Average so far: ${formatUsageValue(insight.consumptionPerDay)} / usage day\n\n`,
+  );
+  if (insight.headroomPerDay !== undefined) {
+    tooltip.appendMarkdown(
+      `Headroom: ${formatHeadroom(insight.headroomPerDay)} / usage day\n\n`,
+    );
+  }
+  tooltip.appendMarkdown(
+    `Usage days: ${insight.usageDaysElapsed} elapsed · ${insight.usageDaysRemaining} remaining · ${insight.usageDaysTotal} total\n\n`,
+  );
+  if (insight.usedFallbackPeriod) {
+    tooltip.appendMarkdown(
+      `_Period unknown — using the current calendar month._\n\n`,
+    );
+  }
+}
+
+function formatHeadroom(headroom: number): string {
+  return headroom >= 0
+    ? `${formatUsageValue(headroom)} under budget`
+    : `${formatUsageValue(Math.abs(headroom))} over budget`;
 }
 
 function renderError() {
@@ -531,7 +873,11 @@ async function showDetails() {
     return;
   }
 
+  const insight = computeDailyInsight(lastSnapshot);
+  const toggleLabel = `$(arrow-swap) Toggle daily / total view (now: ${activeView})`;
+
   const lines = [
+    toggleLabel,
     `Source: ${lastSnapshot.source}`,
     lastSnapshot.label ? `Bucket: ${lastSnapshot.label}` : undefined,
     `Used: ${formatUsageValue(lastSnapshot.used)}`,
@@ -550,14 +896,46 @@ async function showDetails() {
     lastSnapshot.periodEnd
       ? `Period end: ${lastSnapshot.periodEnd}`
       : undefined,
+    ...dailyDetailLines(insight),
     `Refreshed: ${lastSnapshot.refreshedAt.toLocaleString()}`,
     ...lastSnapshot.rawHighlights,
   ].filter((line): line is string => Boolean(line));
 
-  await vscode.window.showQuickPick(lines, {
+  const picked = await vscode.window.showQuickPick(lines, {
     title: "Cursor Monthly Usage",
     placeHolder: "Current usage details",
   });
+
+  if (picked === toggleLabel) {
+    await vscode.commands.executeCommand("cursorUsageForTeams.toggleView");
+  }
+}
+
+function dailyDetailLines(insight: DailyInsight | undefined): string[] {
+  if (!insight) {
+    return [];
+  }
+
+  const lines: string[] = [
+    insight.recommendedPerDay !== undefined
+      ? `Recommended per usage day (${insight.strategy}): ${formatUsageValue(insight.recommendedPerDay)}`
+      : `Recommended per usage day: — (no limit/period available)`,
+    `Average per usage day: ${formatUsageValue(insight.consumptionPerDay)}`,
+  ];
+
+  if (insight.headroomPerDay !== undefined) {
+    lines.push(`Headroom per usage day: ${formatHeadroom(insight.headroomPerDay)}`);
+  }
+
+  lines.push(
+    `Usage days: ${insight.usageDaysElapsed} elapsed / ${insight.usageDaysRemaining} remaining / ${insight.usageDaysTotal} total`,
+  );
+
+  if (insight.usedFallbackPeriod) {
+    lines.push(`Period unknown — using current calendar month.`);
+  }
+
+  return lines;
 }
 
 function formatUsageValue(value: number): string {

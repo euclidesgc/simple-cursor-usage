@@ -16,7 +16,8 @@
     "onCommand:cursorUsageForTeams.refresh",
     "onCommand:cursorUsageForTeams.showDetails",
     "onCommand:cursorUsageForTeams.setToken",
-    "onCommand:cursorUsageForTeams.clearToken"
+    "onCommand:cursorUsageForTeams.clearToken",
+    "onCommand:cursorUsageForTeams.toggleView"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -36,6 +37,10 @@
       {
         "command": "cursorUsageForTeams.clearToken",
         "title": "Cursor Monthly Usage: Clear Stored Token"
+      },
+      {
+        "command": "cursorUsageForTeams.toggleView",
+        "title": "Cursor Monthly Usage: Toggle Daily / Total View"
       }
     ],
     "configuration": {
@@ -60,7 +65,74 @@
             "fraction",
             "percent"
           ],
-          "description": "Status bar format."
+          "description": "Status bar format for the total (period) view."
+        },
+        "cursorUsageForTeams.dailyDisplayFormat": {
+          "type": "string",
+          "default": "inherit",
+          "enum": [
+            "inherit",
+            "remaining",
+            "fraction",
+            "percent"
+          ],
+          "enumDescriptions": [
+            "Use the same format as displayFormat.",
+            "Daily headroom, e.g. $3.33/day left.",
+            "Average vs recommended, e.g. $5.22 / $8.55 per day.",
+            "Percent of the daily budget left, e.g. 39% left."
+          ],
+          "description": "Status bar format for the daily (per-usage-day) view. 'inherit' follows displayFormat."
+        },
+        "cursorUsageForTeams.defaultView": {
+          "type": "string",
+          "default": "total",
+          "enum": [
+            "total",
+            "daily"
+          ],
+          "enumDescriptions": [
+            "Show the period total (used/limit/remaining).",
+            "Show the per-usage-day pacing insight."
+          ],
+          "description": "Which view the status bar starts in. Toggle at runtime with the Toggle Daily / Total View command."
+        },
+        "cursorUsageForTeams.usageDays": {
+          "type": "array",
+          "default": [
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday"
+          ],
+          "items": {
+            "type": "string",
+            "enum": [
+              "sunday",
+              "monday",
+              "tuesday",
+              "wednesday",
+              "thursday",
+              "friday",
+              "saturday"
+            ]
+          },
+          "uniqueItems": true,
+          "description": "Days of the week you actually use the AI (may include weekends). Used to compute the recommended and average spend per usage day. Empty/invalid falls back to Monday–Friday."
+        },
+        "cursorUsageForTeams.dailyBudgetStrategy": {
+          "type": "string",
+          "default": "dynamic",
+          "enum": [
+            "dynamic",
+            "static"
+          ],
+          "enumDescriptions": [
+            "Recommended per day = remaining / remaining usage days. Self-corrects your pace.",
+            "Recommended per day = limit / total usage days in the period. Fixed monthly target."
+          ],
+          "description": "How the recommended spend per usage day is calculated for the daily view."
         },
         "cursorUsageForTeams.warningRemainingPercent": {
           "type": "number",
