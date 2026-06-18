@@ -246,6 +246,7 @@ async function fetchUsageSnapshot(
   const webBase = validateApiBaseUrl(
     getConfig<string>("apiBaseUrl", "https://cursor.com"),
   );
+  warnIfUnexpectedApiHost(webBase);
   const usageSummaryUrl = new URL("/api/usage-summary", webBase);
 
   const attempts: Array<Promise<UsageEndpointResult>> = [
@@ -974,6 +975,28 @@ function validateApiBaseUrl(raw: string): URL {
   return url;
 }
 
+const warnedApiHosts = new Set<string>();
+
+function isAllowedApiHost(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return host === "cursor.com" || host.endsWith(".cursor.com");
+}
+
+// Defense in depth on top of the machine-scoped apiBaseUrl setting: the session
+// cookie is only ever sent to this origin, so warn (once per host per session)
+// if it is not a Cursor host.
+function warnIfUnexpectedApiHost(url: URL): void {
+  if (isAllowedApiHost(url.hostname) || warnedApiHosts.has(url.host)) {
+    return;
+  }
+
+  warnedApiHosts.add(url.host);
+  void vscode.window.showWarningMessage(
+    `Cursor Monthly Usage is sending your session cookie to a non-Cursor host: ${url.host}. ` +
+      "Only change cursorUsageForTeams.apiBaseUrl if you trust this origin.",
+  );
+}
+
 async function discoverCursorAuth(): Promise<CursorSessionAuth | undefined> {
   const values = await loadCursorStateValues();
   if (!values) {
@@ -1191,6 +1214,9 @@ function workosIdFromSessionToken(sessionToken: string): string | undefined {
   ]);
 }
 
+// Decodes the JWT payload WITHOUT verifying its signature. This is intentional
+// and safe here: the token belongs to the signed-in user and is only read to
+// extract the WorkOS id (`sub`); it is never trusted for authorization.
 function decodeJwtPayload(token: string): Record<string, unknown> | undefined {
   const parts = token.split(".");
   if (parts.length < 3) {

@@ -49,7 +49,8 @@
         "cursorUsageForTeams.apiBaseUrl": {
           "type": "string",
           "default": "https://cursor.com",
-          "description": "Cursor web API origin for usage-summary requests. Must be HTTPS."
+          "scope": "machine",
+          "markdownDescription": "Cursor web API origin for usage-summary requests. Must be HTTPS. Your session cookie is sent to this origin, so this is `machine` scoped — it can only be set in user settings, never overridden by a workspace."
         },
         "cursorUsageForTeams.pollIntervalSeconds": {
           "type": "number",
@@ -151,7 +152,8 @@
         "cursorUsageForTeams.enableLocalTokenDiscovery": {
           "type": "boolean",
           "default": true,
-          "description": "Read Cursor local state.vscdb to find the session token and user id."
+          "scope": "machine",
+          "description": "Read Cursor local state.vscdb to find the session token and user id. Machine scoped so a workspace cannot toggle local credential discovery."
         }
       }
     }
