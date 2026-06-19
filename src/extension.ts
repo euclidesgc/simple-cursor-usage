@@ -111,7 +111,8 @@ export function activate(context: vscode.ExtensionContext) {
     ),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (
-        event.affectsConfiguration("cursorUsageForTeams.statusBarDisplay")
+        event.affectsConfiguration("cursorUsageForTeams.view") ||
+        event.affectsConfiguration("cursorUsageForTeams.format")
       ) {
         activeDisplay = readConfiguredDisplay();
         void viewMemento?.update(displayStateKey, activeDisplay);
@@ -192,27 +193,24 @@ function flipView(display: StatusBarDisplay): StatusBarDisplay {
   return composeDisplay(view === "daily" ? "total" : "daily", format);
 }
 
-function readConfiguredDisplay(): StatusBarDisplay {
-  const configured = getConfig<string>("statusBarDisplay", "totalRemaining");
-  if (isStatusBarDisplay(configured)) {
-    return configured;
-  }
+function isViewMode(value: unknown): value is ViewMode {
+  return value === "total" || value === "daily";
+}
 
-  const defaultView = getConfig<ViewMode>("defaultView", "total");
-  const displayFormat = getConfig<DisplayFormat>("displayFormat", "remaining");
-  const dailyRaw = getConfig<string>("dailyDisplayFormat", "inherit");
-  const view: ViewMode = defaultView === "daily" ? "daily" : "total";
-  let format: DisplayFormat = displayFormat;
-  if (view === "daily") {
-    if (
-      dailyRaw === "remaining" ||
-      dailyRaw === "fraction" ||
-      dailyRaw === "percent"
-    ) {
-      format = dailyRaw;
-    }
-  }
-  return composeDisplay(view, format);
+function isDisplayFormat(value: unknown): value is DisplayFormat {
+  return value === "remaining" || value === "fraction" || value === "percent";
+}
+
+// The status bar is configured by two independent settings: "view" (monthly vs.
+// daily) and "format" (remaining/fraction/percent). They are combined into the
+// internal StatusBarDisplay used for rendering.
+function readConfiguredDisplay(): StatusBarDisplay {
+  const view = getConfig<string>("view", "total");
+  const format = getConfig<string>("format", "remaining");
+  return composeDisplay(
+    isViewMode(view) ? view : "total",
+    isDisplayFormat(format) ? format : "remaining",
+  );
 }
 
 function resolveInitialDisplay(): StatusBarDisplay {

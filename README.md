@@ -40,16 +40,22 @@ All settings use the prefix `cursorUsageForTeams.`.
 
 ### Status Bar
 
+The status bar is configured by **two independent settings** — one for *what* it
+shows and one for *how* it is formatted. In the Settings UI they appear with
+friendly labels (e.g. "Monthly total", "Used ÷ limit"); the raw values are shown
+below for `settings.json`.
+
 | Setting | Type | Default | Description |
 | ------- | ---- | ------- | ----------- |
-| `statusBarDisplay` | `string` | `totalRemaining` | Unified status bar: `totalRemaining`, `totalFraction`, `totalPercent`, `dailyRemaining`, `dailyFraction`, `dailyPercent`. **Toggle Daily / Total View** switches period while keeping format. |
+| `view` | `string` | `total` | **What** to show: `total` (Monthly total) or `daily` (Daily pacing). The **Toggle Daily / Total View** command flips this at runtime, keeping the format. |
+| `format` | `string` | `remaining` | **How** to format the number: `remaining` (Amount left), `fraction` (Used ÷ limit), or `percent` (Percent left). Applies to both views. |
 
 ### Daily Pacing
 
 | Setting | Type | Default | Description |
 | ------- | ---- | ------- | ----------- |
 | `usageDays` | `array` | `["monday"…"friday"]` | Weekdays you actually use the AI (add weekends if you work then). Drives elapsed/remaining usage days and the recommended daily budget. |
-| `dailyBudgetStrategy` | `string` | `dynamic` | Formula for recommended spend per usage day: `dynamic` (`remaining ÷ remaining usage days`) or `static` (`limit ÷ total usage days in the period`). |
+| `dailyBudgetStrategy` | `string` | `dynamic` | Formula for recommended spend per usage day: `dynamic` (Adaptive — `remaining ÷ remaining usage days`) or `static` (Fixed — `limit ÷ total usage days in the period`). |
 
 ### Low-Budget Alerts
 
@@ -67,20 +73,19 @@ All settings use the prefix `cursorUsageForTeams.`.
 | `enableLocalTokenDiscovery` | `boolean` | `true` | Read Cursor login from local `state.vscdb` for automatic auth. Disable to paste a token with **Set Token**. **Machine** scoped. |
 
 
-### Display formats (`statusBarDisplay`)
+### View × format
 
-Six values combine **view** (monthly period vs. daily pacing) and **format**:
+`view` and `format` combine into what the status bar renders:
 
-| Value | What you see |
-| ----- | ------------ |
-| `totalRemaining` (default) | Period remaining, e.g. dollars left |
-| `totalFraction` | Period used vs. limit |
-| `totalPercent` | Percent of period budget left |
-| `dailyRemaining` | Daily headroom per usage day |
-| `dailyFraction` | Average vs. recommended per day |
-| `dailyPercent` | Percent of daily budget left |
+| `format` \ `view` | `total` (Monthly) | `daily` (Daily pacing) |
+| ----------------- | ----------------- | ---------------------- |
+| `remaining` (Amount left) | `$76.93 left` | `$3.33/day left` (headroom) |
+| `fraction` (Used ÷ limit) | `$73.07 / $150.00` | `$5.22 / $8.55 per day` (avg / recommended) |
+| `percent` (Percent left) | `51% left` | `39% left` (of daily budget) |
 
-**Toggle Daily / Total View** keeps the format (remaining, fraction, or percent) and only switches monthly vs. daily pacing.
+**Toggle Daily / Total View** keeps the format and only switches the `view`
+(monthly ↔ daily). The numbers above use the example from
+[Daily usage view](#daily-usage-view).
 
 ## Daily usage view
 

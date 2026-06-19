@@ -43,27 +43,44 @@
         "title": "Status Bar",
         "order": 0,
         "properties": {
-          "cursorUsageForTeams.statusBarDisplay": {
+          "cursorUsageForTeams.view": {
             "type": "string",
-            "default": "totalRemaining",
+            "default": "total",
             "order": 1,
             "enum": [
-              "totalRemaining",
-              "totalFraction",
-              "totalPercent",
-              "dailyRemaining",
-              "dailyFraction",
-              "dailyPercent"
+              "total",
+              "daily"
             ],
-            "enumDescriptions": [
-              "Monthly period remaining dollars.",
-              "Monthly period used vs. limit fraction.",
-              "Monthly period percent of budget left.",
-              "Daily pacing daily headroom.",
-              "Daily pacing average vs. recommended per day.",
-              "Daily pacing percent of daily budget left."
+            "enumItemLabels": [
+              "Monthly total",
+              "Daily pacing"
             ],
-            "markdownDescription": "One setting for what the status bar shows and how numbers are formatted. Pick monthly or daily pacing plus remaining, fraction, or percent. Use Cursor Monthly Usage: Toggle Daily / Total View to switch between monthly and daily while keeping the same format (no extra API call)."
+            "markdownEnumDescriptions": [
+              "Usage for the whole billing period — used, limit, and remaining.",
+              "Budget per usage day — how much you can spend each day you work without exhausting the period before it ends."
+            ],
+            "markdownDescription": "**What** the status bar shows. Pair it with **Format** below. You can flip this at any time with the command **Cursor Monthly Usage: Toggle Daily / Total View** (keeps the chosen format, no extra API call)."
+          },
+          "cursorUsageForTeams.format": {
+            "type": "string",
+            "default": "remaining",
+            "order": 2,
+            "enum": [
+              "remaining",
+              "fraction",
+              "percent"
+            ],
+            "enumItemLabels": [
+              "Amount left",
+              "Used ÷ limit",
+              "Percent left"
+            ],
+            "markdownEnumDescriptions": [
+              "How many dollars are left. Monthly: `$76.93 left`. Daily: `$3.33/day left` (headroom for today).",
+              "Two values side by side. Monthly: `$73.07 / $150.00` (used / limit). Daily: `$5.22 / $8.55 per day` (average / recommended).",
+              "Percent of the budget still free. Monthly: `51% left`. Daily: `39% left` (of the daily budget)."
+            ],
+            "markdownDescription": "**How** the number is formatted. Applies to both the **Monthly** and **Daily** views."
           }
         }
       },
@@ -104,11 +121,15 @@
               "dynamic",
               "static"
             ],
-            "enumDescriptions": [
-              "**Dynamic** \u2014 `remaining \u00f7 remaining usage days`. Adjusts as you spend so you finish the period on budget.",
-              "**Static** \u2014 `limit \u00f7 total usage days in the period`. A fixed daily target for the whole month."
+            "enumItemLabels": [
+              "Adaptive (adjusts as you spend)",
+              "Fixed (same target all month)"
             ],
-            "markdownDescription": "Formula for **recommended spend per usage day** in the daily pacing view."
+            "markdownEnumDescriptions": [
+              "**Adaptive** \u2014 `remaining \u00f7 remaining usage days`. Self-corrects as you spend so you finish the period on budget. e.g. `$76.93 \u00f7 9 = $8.55/day`.",
+              "**Fixed** \u2014 `limit \u00f7 total usage days in the period`. A constant daily target for the whole month. e.g. `$150.00 \u00f7 22 = $6.82/day`."
+            ],
+            "markdownDescription": "Formula for the **recommended spend per usage day** shown in the **Daily pacing** view."
           }
         }
       },
