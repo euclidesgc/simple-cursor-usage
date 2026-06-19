@@ -4,12 +4,42 @@ import * as path from "path";
 import { existsSync } from "fs";
 import { readFile } from "fs/promises";
 import initSqlJs, { type SqlJsStatic } from "sql.js";
+import {
+  computeDailyInsight,
+  normalizeUsageDays,
+  DEFAULT_USAGE_DAYS,
+  type DailyBudgetStrategy,
+  type DailyInsight,
+} from "./dailyInsight";
 
 const secretKey = "cursorUsageForTeams.accessToken";
 let sqlJs: Promise<SqlJsStatic> | undefined;
 let extensionPath: string | undefined;
 
 type DisplayFormat = "remaining" | "fraction" | "percent";
+type ViewMode = "total" | "daily";
+type StatusBarDisplay =
+  | "totalRemaining"
+  | "totalFraction"
+  | "totalPercent"
+  | "dailyRemaining"
+  | "dailyFraction"
+  | "dailyPercent";
+
+const STATUS_BAR_DISPLAYS: readonly StatusBarDisplay[] = [
+  "totalRemaining",
+  "totalFraction",
+  "totalPercent",
+  "dailyRemaining",
+  "dailyFraction",
+  "dailyPercent",
+];
+
+type StatusBarModel = {
+  icon: string;
+  value: string;
+  percentForColor?: number;
+};
 
 type UsageSnapshot = {
   source: string;
@@ -39,13 +69,20 @@ type CursorSessionAuth = {
   rawAccessToken?: string;
 };
 
+const displayStateKey = "cursorUsageForTeams.statusBarDisplay";
+const legacyViewStateKey = "cursorUsageForTeams.activeView";
+
 let statusBar: vscode.StatusBarItem;
 let refreshTimer: NodeJS.Timeout | undefined;
 let lastSnapshot: UsageSnapshot | undefined;
 let lastError: string | undefined;
+let activeDisplay: StatusBarDisplay = "totalRemaining";
+let viewMemento: vscode.Memento | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
   extensionPath = context.extensionPath;
+  viewMemento = context.globalState;
+  activeDisplay = resolveInitialDisplay();
   statusBar = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Right,
     98,
@@ -69,7 +106,22 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("cursorUsageForTeams.clearToken", () =>
       clearToken(context),
     ),
+    vscode.commands.registerCommand("cursorUsageForTeams.toggleView", () =>
+      toggleView(),
+    ),
     vscode.workspace.onDidChangeConfiguration((event) => {
+      if (
+        event.affectsConfiguration("cursorUsageForTeams.view") ||
+        event.affectsConfiguration("cursorUsageForTeams.format")
+      ) {
+        activeDisplay = readConfiguredDisplay();
+        void viewMemento?.update(displayStateKey, activeDisplay);
+        if (lastSnapshot) {
+          renderSnapshot(lastSnapshot);
+        } else if (lastError) {
+          renderError();
+        }
+      }
       if (event.affectsConfiguration("cursorUsageForTeams")) {
         scheduleRefresh(context);
         void refreshUsage(context, false);
@@ -87,6 +139,119 @@ export function deactivate() {
   }
 }
 
+function isStatusBarDisplay(value: unknown): value is StatusBarDisplay {
+  return (
+    typeof value === "string" &&
+    (STATUS_BAR_DISPLAYS as readonly string[]).includes(value)
+  );
+}
+
+function parseDisplay(display: StatusBarDisplay): {
+  view: ViewMode;
+  format: DisplayFormat;
+} {
+  switch (display) {
+    case "totalRemaining":
+      return { view: "total", format: "remaining" };
+    case "totalFraction":
+      return { view: "total", format: "fraction" };
+    case "totalPercent":
+      return { view: "total", format: "percent" };
+    case "dailyRemaining":
+      return { view: "daily", format: "remaining" };
+    case "dailyFraction":
+      return { view: "daily", format: "fraction" };
+    case "dailyPercent":
+      return { view: "daily", format: "percent" };
+  }
+}
+
+function composeDisplay(
+  view: ViewMode,
+  format: DisplayFormat,
+): StatusBarDisplay {
+  if (view === "total") {
+    if (format === "remaining") {
+      return "totalRemaining";
+    }
+    if (format === "fraction") {
+      return "totalFraction";
+    }
+    return "totalPercent";
+  }
+  if (format === "remaining") {
+    return "dailyRemaining";
+  }
+  if (format === "fraction") {
+    return "dailyFraction";
+  }
+  return "dailyPercent";
+}
+
+function flipView(display: StatusBarDisplay): StatusBarDisplay {
+  const { view, format } = parseDisplay(display);
+  return composeDisplay(view === "daily" ? "total" : "daily", format);
+}
+
+function isViewMode(value: unknown): value is ViewMode {
+  return value === "total" || value === "daily";
+}
+
+function isDisplayFormat(value: unknown): value is DisplayFormat {
+  return value === "remaining" || value === "fraction" || value === "percent";
+}
+
+// The status bar is configured by two independent settings: "view" (monthly vs.
+// daily) and "format" (remaining/fraction/percent). They are combined into the
+// internal StatusBarDisplay used for rendering.
+function readConfiguredDisplay(): StatusBarDisplay {
+  const view = getConfig<string>("view", "total");
+  const format = getConfig<string>("format", "remaining");
+  return composeDisplay(
+    isViewMode(view) ? view : "total",
+    isDisplayFormat(format) ? format : "remaining",
+  );
+}
+
+function resolveInitialDisplay(): StatusBarDisplay {
+  const stored = viewMemento?.get<unknown>(displayStateKey);
+  if (isStatusBarDisplay(stored)) {
+    return stored;
+  }
+
+  const legacyView = viewMemento?.get<ViewMode>(legacyViewStateKey);
+  if (legacyView === "total" || legacyView === "daily") {
+    const { format } = parseDisplay(readConfiguredDisplay());
+    return composeDisplay(legacyView, format);
+  }
+
+  return readConfiguredDisplay();
+}
+
+function displayModeLabel(display: StatusBarDisplay): string {
+  const { view, format } = parseDisplay(display);
+  const viewLabel = view === "total" ? "monthly" : "daily";
+  const formatLabel =
+    format === "remaining"
+      ? "remaining"
+      : format === "fraction"
+        ? "fraction"
+        : "percent";
+  return `${viewLabel} · ${formatLabel}`;
+}
+
+async function toggleView() {
+  activeDisplay = flipView(activeDisplay);
+  await viewMemento?.update(displayStateKey, activeDisplay);
+
+  if (lastSnapshot) {
+    renderSnapshot(lastSnapshot);
+  } else if (lastError) {
+    renderError();
+  } else {
+    setLoading();
+  }
+}
 function scheduleRefresh(context: vscode.ExtensionContext) {
   if (refreshTimer) {
     clearInterval(refreshTimer);
@@ -190,52 +355,47 @@ async function fetchUsageSnapshot(
   const webBase = validateApiBaseUrl(
     getConfig<string>("apiBaseUrl", "https://cursor.com"),
   );
+  warnIfUnexpectedApiHost(webBase);
   const usageSummaryUrl = new URL("/api/usage-summary", webBase);
 
-  const attempts: Array<Promise<UsageEndpointResult>> = [
-    requestJson(usageSummaryUrl, {
-      method: "GET",
-      headers: {
-        Cookie: buildSessionCookieHeader(auth),
-      },
-    }),
-  ];
-
-  const results = await Promise.all(attempts);
-  const payloads = results.flatMap((result) =>
-    result.payload !== undefined ? [result.payload] : [],
-  );
-  const snapshots = results.flatMap((result) => {
-    if (result.payload === undefined) {
-      return [];
-    }
-
-    const parsed =
-      parseDashboardUsage(result.payload) ??
-parseGenericUsage(result.payload, result.endpoint);
-    return parsed ? [parsed] : [];
+  const result = await requestJson(usageSummaryUrl, {
+    method: "GET",
+    headers: {
+      Cookie: buildSessionCookieHeader(auth),
+    },
   });
 
-  const snapshot = snapshots[0];
+  const snapshot =
+    result.payload !== undefined
+      ? (parseDashboardUsage(result.payload) ??
+        parseGenericUsage(result.payload, result.endpoint))
+      : undefined;
+
   if (!snapshot) {
     throw new Error(
-      `Cursor usage API returned an unrecognized response. ${summarizeEndpointResults(results)}`,
+      `Cursor usage API returned an unrecognized response. ${summarizeEndpointResults([result])}`,
     );
   }
 
-  snapshot.rawHighlights = collectHighlights(payloads);
+  snapshot.rawHighlights = collectHighlights(
+    result.payload !== undefined ? [result.payload] : [],
+  );
   snapshot.refreshedAt = new Date();
   return snapshot;
 }
+
+const REQUEST_TIMEOUT_MS = 15000;
 
 async function requestJson(
   url: URL,
   init: RequestInit,
 ): Promise<UsageEndpointResult> {
   const endpoint = url.pathname;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
   try {
-    const response = await fetch(url, init);
+    const response = await fetch(url, { ...init, signal: controller.signal });
     const text = await response.text();
     const base = {
       endpoint,
@@ -261,11 +421,15 @@ async function requestJson(
 
     return { ...base, payload };
   } catch (error) {
-    return {
-      endpoint,
-      ok: false,
-      diagnostic: error instanceof Error ? error.message : "request failed",
-    };
+    const diagnostic =
+      error instanceof Error && error.name === "AbortError"
+        ? `request timed out after ${REQUEST_TIMEOUT_MS / 1000}s`
+        : error instanceof Error
+          ? error.message
+          : "request failed";
+    return { endpoint, ok: false, diagnostic };
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -322,7 +486,6 @@ function parseDashboardUsage(payload: unknown): UsageSnapshot | undefined {
     refreshedAt: new Date(),
   });
 }
-
 
 function parseGenericUsage(
   payload: unknown,
@@ -414,7 +577,6 @@ function parseGenericUsage(
   return snapshot;
 }
 
-
 function completeSnapshot(snapshot: UsageSnapshot): UsageSnapshot {
   if (snapshot.limit !== undefined) {
     snapshot.remaining = Math.max(0, snapshot.limit - snapshot.used);
@@ -427,32 +589,84 @@ function completeSnapshot(snapshot: UsageSnapshot): UsageSnapshot {
   return snapshot;
 }
 
+function parseUsageDays(): Set<number> {
+  return normalizeUsageDays(
+    getConfig<unknown>("usageDays", DEFAULT_USAGE_DAYS),
+  );
+}
+
+function resolveDailyBudgetStrategy(): DailyBudgetStrategy {
+  return getConfig<DailyBudgetStrategy>("dailyBudgetStrategy", "dynamic") ===
+    "static"
+    ? "static"
+    : "dynamic";
+}
+
+// Thin wrapper that feeds the pure pacing math (see ./dailyInsight) with values
+// resolved from configuration and the current clock.
+function buildInsight(snapshot: UsageSnapshot): DailyInsight {
+  return computeDailyInsight(snapshot, {
+    usageDays: parseUsageDays(),
+    strategy: resolveDailyBudgetStrategy(),
+    now: new Date(),
+  });
+}
 
 function renderSnapshot(snapshot: UsageSnapshot) {
-  const displayFormat = getConfig<DisplayFormat>("displayFormat", "remaining");
-  const value = formatSnapshotValue(snapshot, displayFormat);
-  statusBar.text = `$(pulse) ${value}`;
-  statusBar.tooltip = buildTooltip(snapshot);
-  statusBar.backgroundColor = undefined;
+  const { view, format } = parseDisplay(activeDisplay);
+  const insight = buildInsight(snapshot);
+
+  // Daily view needs a computable budget; otherwise fall back to the total view.
+  const model =
+    view === "daily" && insight && insight.recommendedPerDay !== undefined
+      ? buildDailyModel(insight, format)
+      : buildTotalModel(snapshot, format);
+
+  statusBar.text = `$(${model.icon}) ${model.value}`;
+  statusBar.tooltip = buildTooltip(snapshot, insight);
+  statusBar.backgroundColor = colorForPercent(model.percentForColor);
+}
+
+function buildTotalModel(
+  snapshot: UsageSnapshot,
+  displayFormat: DisplayFormat,
+): StatusBarModel {
+  return {
+    icon: "pulse",
+    value: formatSnapshotValue(snapshot, displayFormat),
+    percentForColor: snapshot.percentRemaining,
+  };
+}
+
+function buildDailyModel(
+  insight: DailyInsight,
+  displayFormat: DisplayFormat,
+): StatusBarModel {
+  return {
+    icon: "calendar",
+    value: formatDailyValue(insight, displayFormat),
+    percentForColor: insight.percentRemainingOfBudget,
+  };
+}
+
+function colorForPercent(
+  percent: number | undefined,
+): vscode.ThemeColor | undefined {
+  if (percent === undefined) {
+    return undefined;
+  }
 
   const warning = getConfig<number>("warningRemainingPercent", 20);
   const critical = getConfig<number>("criticalRemainingPercent", 10);
 
-  if (
-    snapshot.percentRemaining !== undefined &&
-    snapshot.percentRemaining <= critical
-  ) {
-    statusBar.backgroundColor = new vscode.ThemeColor(
-      "statusBarItem.errorBackground",
-    );
-  } else if (
-    snapshot.percentRemaining !== undefined &&
-    snapshot.percentRemaining <= warning
-  ) {
-    statusBar.backgroundColor = new vscode.ThemeColor(
-      "statusBarItem.warningBackground",
-    );
+  if (percent <= critical) {
+    return new vscode.ThemeColor("statusBarItem.errorBackground");
   }
+  if (percent <= warning) {
+    return new vscode.ThemeColor("statusBarItem.warningBackground");
+  }
+
+  return undefined;
 }
 
 function formatSnapshotValue(
@@ -474,7 +688,38 @@ function formatSnapshotValue(
   return `${formatUsageValue(snapshot.used)} used`;
 }
 
-function buildTooltip(snapshot: UsageSnapshot): vscode.MarkdownString {
+function formatDailyValue(
+  insight: DailyInsight,
+  displayFormat: DisplayFormat,
+): string {
+  const recommended = insight.recommendedPerDay ?? 0;
+
+  if (displayFormat === "fraction") {
+    return `${formatUsageValue(insight.consumptionPerDay)} / ${formatUsageValue(recommended)} per day`;
+  }
+
+  if (displayFormat === "percent") {
+    if (insight.percentRemainingOfBudget === undefined) {
+      return `${formatUsageValue(insight.consumptionPerDay)} per day`;
+    }
+    if (insight.percentRemainingOfBudget < 0) {
+      return "over daily budget";
+    }
+    return `${Math.round(insight.percentRemainingOfBudget)}% left`;
+  }
+
+  // "remaining" → daily headroom (recommended minus your average pace).
+  const headroom = insight.headroomPerDay ?? 0;
+  if (headroom < 0) {
+    return `${formatUsageValue(Math.abs(headroom))}/day over`;
+  }
+  return `${formatUsageValue(headroom)}/day left`;
+}
+
+function buildTooltip(
+  snapshot: UsageSnapshot,
+  insight: DailyInsight | undefined,
+): vscode.MarkdownString {
   const tooltip = new vscode.MarkdownString(undefined, true);
   tooltip.isTrusted = false;
   tooltip.appendMarkdown("**Cursor Monthly Usage**\n\n");
@@ -482,13 +727,9 @@ function buildTooltip(snapshot: UsageSnapshot): vscode.MarkdownString {
   if (snapshot.label) {
     tooltip.appendMarkdown(`Bucket: ${snapshot.label}\n\n`);
   }
-  tooltip.appendMarkdown(
-    `Used: ${formatUsageValue(snapshot.used)}\n\n`,
-  );
+  tooltip.appendMarkdown(`Used: ${formatUsageValue(snapshot.used)}\n\n`);
   if (snapshot.limit !== undefined) {
-    tooltip.appendMarkdown(
-      `Limit: ${formatUsageValue(snapshot.limit)}\n\n`,
-    );
+    tooltip.appendMarkdown(`Limit: ${formatUsageValue(snapshot.limit)}\n\n`);
   }
   if (snapshot.remaining !== undefined) {
     tooltip.appendMarkdown(
@@ -501,8 +742,48 @@ function buildTooltip(snapshot: UsageSnapshot): vscode.MarkdownString {
   if (snapshot.periodEnd) {
     tooltip.appendMarkdown(`Period end: ${snapshot.periodEnd}\n\n`);
   }
+  appendDailyTooltip(tooltip, insight);
   tooltip.appendMarkdown(`Refreshed: ${snapshot.refreshedAt.toLocaleString()}`);
   return tooltip;
+}
+
+function appendDailyTooltip(
+  tooltip: vscode.MarkdownString,
+  insight: DailyInsight | undefined,
+) {
+  if (!insight) {
+    return;
+  }
+
+  tooltip.appendMarkdown(`---\n\n`);
+  tooltip.appendMarkdown(`**Per usage day** (${insight.strategy})\n\n`);
+  tooltip.appendMarkdown(
+    insight.recommendedPerDay !== undefined
+      ? `Recommended: ${formatUsageValue(insight.recommendedPerDay)} / usage day\n\n`
+      : `Recommended: — (no limit/period available)\n\n`,
+  );
+  tooltip.appendMarkdown(
+    `Average so far: ${formatUsageValue(insight.consumptionPerDay)} / usage day\n\n`,
+  );
+  if (insight.headroomPerDay !== undefined) {
+    tooltip.appendMarkdown(
+      `Headroom: ${formatHeadroom(insight.headroomPerDay)} / usage day\n\n`,
+    );
+  }
+  tooltip.appendMarkdown(
+    `Usage days: ${insight.usageDaysElapsed} elapsed · ${insight.usageDaysRemaining} remaining · ${insight.usageDaysTotal} total\n\n`,
+  );
+  if (insight.usedFallbackPeriod) {
+    tooltip.appendMarkdown(
+      `_Period unknown — using the current calendar month._\n\n`,
+    );
+  }
+}
+
+function formatHeadroom(headroom: number): string {
+  return headroom >= 0
+    ? `${formatUsageValue(headroom)} under budget`
+    : `${formatUsageValue(Math.abs(headroom))} over budget`;
 }
 
 function renderError() {
@@ -531,7 +812,11 @@ async function showDetails() {
     return;
   }
 
+  const insight = buildInsight(lastSnapshot);
+  const toggleLabel = `$(arrow-swap) Toggle daily / total view (now: ${displayModeLabel(activeDisplay)})`;
+
   const lines = [
+    toggleLabel,
     `Source: ${lastSnapshot.source}`,
     lastSnapshot.label ? `Bucket: ${lastSnapshot.label}` : undefined,
     `Used: ${formatUsageValue(lastSnapshot.used)}`,
@@ -550,14 +835,48 @@ async function showDetails() {
     lastSnapshot.periodEnd
       ? `Period end: ${lastSnapshot.periodEnd}`
       : undefined,
+    ...dailyDetailLines(insight),
     `Refreshed: ${lastSnapshot.refreshedAt.toLocaleString()}`,
     ...lastSnapshot.rawHighlights,
   ].filter((line): line is string => Boolean(line));
 
-  await vscode.window.showQuickPick(lines, {
+  const picked = await vscode.window.showQuickPick(lines, {
     title: "Cursor Monthly Usage",
     placeHolder: "Current usage details",
   });
+
+  if (picked === toggleLabel) {
+    await vscode.commands.executeCommand("cursorUsageForTeams.toggleView");
+  }
+}
+
+function dailyDetailLines(insight: DailyInsight | undefined): string[] {
+  if (!insight) {
+    return [];
+  }
+
+  const lines: string[] = [
+    insight.recommendedPerDay !== undefined
+      ? `Recommended per usage day (${insight.strategy}): ${formatUsageValue(insight.recommendedPerDay)}`
+      : `Recommended per usage day: — (no limit/period available)`,
+    `Average per usage day: ${formatUsageValue(insight.consumptionPerDay)}`,
+  ];
+
+  if (insight.headroomPerDay !== undefined) {
+    lines.push(
+      `Headroom per usage day: ${formatHeadroom(insight.headroomPerDay)}`,
+    );
+  }
+
+  lines.push(
+    `Usage days: ${insight.usageDaysElapsed} elapsed / ${insight.usageDaysRemaining} remaining / ${insight.usageDaysTotal} total`,
+  );
+
+  if (insight.usedFallbackPeriod) {
+    lines.push(`Period unknown — using current calendar month.`);
+  }
+
+  return lines;
 }
 
 function formatUsageValue(value: number): string {
@@ -594,6 +913,28 @@ function validateApiBaseUrl(raw: string): URL {
   url.search = "";
   url.hash = "";
   return url;
+}
+
+const warnedApiHosts = new Set<string>();
+
+function isAllowedApiHost(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return host === "cursor.com" || host.endsWith(".cursor.com");
+}
+
+// Defense in depth on top of the machine-scoped apiBaseUrl setting: the session
+// cookie is only ever sent to this origin, so warn (once per host per session)
+// if it is not a Cursor host.
+function warnIfUnexpectedApiHost(url: URL): void {
+  if (isAllowedApiHost(url.hostname) || warnedApiHosts.has(url.host)) {
+    return;
+  }
+
+  warnedApiHosts.add(url.host);
+  void vscode.window.showWarningMessage(
+    `Cursor Monthly Usage is sending your session cookie to a non-Cursor host: ${url.host}. ` +
+      "Only change cursorUsageForTeams.apiBaseUrl if you trust this origin.",
+  );
 }
 
 async function discoverCursorAuth(): Promise<CursorSessionAuth | undefined> {
@@ -692,9 +1033,6 @@ function mergeCursorAuthValues(
 
   return merged;
 }
-
-
-
 
 function buildSessionCookieHeader(auth: CursorSessionAuth): string {
   const raw = auth.rawAccessToken?.trim();
@@ -797,7 +1135,6 @@ function extractWorkosId(
   return undefined;
 }
 
-
 function workosIdFromSessionToken(sessionToken: string): string | undefined {
   const payload = decodeJwtPayload(sessionToken);
   if (!payload) {
@@ -813,6 +1150,9 @@ function workosIdFromSessionToken(sessionToken: string): string | undefined {
   ]);
 }
 
+// Decodes the JWT payload WITHOUT verifying its signature. This is intentional
+// and safe here: the token belongs to the signed-in user and is only read to
+// extract the WorkOS id (`sub`); it is never trusted for authorization.
 function decodeJwtPayload(token: string): Record<string, unknown> | undefined {
   const parts = token.split(".");
   if (parts.length < 3) {
@@ -1049,7 +1389,6 @@ function previewText(text: string): string {
 
   return preview;
 }
-
 
 function findObjectByKey(
   value: unknown,
